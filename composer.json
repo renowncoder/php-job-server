@@ -1,0 +1,14 @@
+{
+  "autoload": {
+    "psr-4": {
+      "Crusse\\": "src/Crusse"
+    }
+  },
+  "description": "A library for computing the results of multiple PHP scripts in parallel",
+  "name": "crusse/job-server",
+  "require": {
+    "php": ">=5.3.3",
+    "symfony/process": "^2.6"
+  },
+  "type": "library"
+}
