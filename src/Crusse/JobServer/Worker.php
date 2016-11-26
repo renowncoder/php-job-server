@@ -23,7 +23,7 @@ class Worker {
     while ( $response ) {
 
       $headers = $response->getHeaders();
-      // FIXME: call the function passed in by the --function cli arg here
+      // FIXME: pass in a 'function' argument in the response, and run that php function
       $dummyResult = str_replace( 'Job', 'Result', $response->getBody() );
       $response = $this->sendMessage( 'job-result', $headers[ 'job-num' ], $dummyResult );
     }
