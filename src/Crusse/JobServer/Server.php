@@ -106,7 +106,7 @@ class Server {
     $workers = array();
 
     for ( $i = 0; $i < $count; $i++ ) {
-      $process = new Process( 'exec php '. dirname( __FILE__ ) .'/forked_worker.php \''.
+      $process = new Process( 'exec php '. dirname( __FILE__ ) .'/worker_process.php \''.
         $this->serverSocketPath .'\'' );
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();
