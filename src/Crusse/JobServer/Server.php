@@ -106,7 +106,10 @@ class Server {
     $workers = array();
 
     for ( $i = 0; $i < $count; $i++ ) {
-      $process = new Process( 'exec php '. dirname( __FILE__ ) .'/worker_process.php \''.
+      // We use 'nice' to make the worker process slightly lower priority than
+      // regular PHP processes that are run by the web server, so that the
+      // worker's don't bring down the web server so easily
+      $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .'/worker_process.php \''.
         $this->serverSocketPath .'\'' );
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();
@@ -166,15 +169,15 @@ class Server {
     if ( $this->sentJobCount >= count( $this->jobQueue ) )
       return;
 
-    $request = new Request( $client );
+    $request = new SocketWriter( $client );
     $request->setTimeout( self::SOCKET_TIMEOUT_SEND );
     $request->addHeader( 'job-num', $this->sentJobCount );
     if ( $includes )
       $request->addHeader( 'includes', implode( ',', $includes ) );
     $job = $this->jobQueue[ $this->sentJobCount ];
     $request->addHeader( 'function', $job[ 0 ] );
-    $request->setbody( $job[ 1 ] );
-    $request->send();
+    $request->setBody( $job[ 1 ] );
+    $request->write();
 
     // Job was sent to worker, free memory
     $this->jobQueue[ $this->sentJobCount ] = '';

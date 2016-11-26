@@ -2,7 +2,7 @@
 
 namespace Crusse\JobServer;
 
-class Request {
+class SocketWriter {
 
   private $socket;
   private $headers = '';
@@ -30,18 +30,19 @@ class Request {
     $this->body = $body;
   }
 
-  function send() {
+  function write() {
 
     // Always set the body-len header after all headers have been added, so that
     // we override any body-len header set earlier
     $this->addHeader( 'body-len', strlen( $this->body ) );
 
-    $requestStr = $this->headers ."\n". $this->body;
-    $bytesSent = stream_socket_sendto( $this->socket, $requestStr );
+    $message = $this->headers ."\n". $this->body;
+    $bytesSent = stream_socket_sendto( $this->socket, $message );
 
     if ( $bytesSent < 1 )
-      throw new \Exception( 'Could not send request to the socket' );
+      throw new \Exception( 'Could not write message to the socket' );
 
     return true;
   }
 }
+

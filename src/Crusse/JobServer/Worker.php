@@ -4,7 +4,7 @@ namespace Crusse\JobServer;
 
 // Including these directly, and not via autoloading, as we might not have an
 // autoloader in the current context
-require_once dirname( __FILE__ ) .'/Request.php';
+require_once dirname( __FILE__ ) .'/SocketWriter.php';
 require_once dirname( __FILE__ ) .'/SocketReader.php';
 
 class Worker {
@@ -62,13 +62,13 @@ class Worker {
 
     $server = $this->getSocketClient();
 
-    $request = new Request( $server );
+    $request = new SocketWriter( $server );
     $request->setTimeout( self::SEND_TIMEOUT );
     $request->addHeader( 'cmd', $cmd );
     if ( $jobNumber !== null )
       $request->addHeader( 'job-num', $jobNumber );
     $request->setBody( $body );
-    $request->send();
+    $request->write();
 
     $responseReader = new SocketReader( $server );
     $responseReader->setTimeout( self::RECV_TIMEOUT );
