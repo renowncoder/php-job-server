@@ -14,6 +14,7 @@ class Server {
   private $serverSocket;
   private $workerCount;
   private $workerProcs = array();
+  private $workerIncludes = array();
   private $jobQueue = array();
   private $results = array();
   private $workerTimeout = 60;
@@ -29,20 +30,29 @@ class Server {
 
   function __destruct() {
 
-    foreach ( $this->workerProcs as $proc ) {
-      // Kill any stuck processes. They should already have all finished, so
-      // normally this should not do anything.
-      $proc->stop( 0, SIGTERM );
-    }
-
     $this->closeConnection( $this->serverSocket );
 
     if ( $this->serverSocketPath )
       unlink( $this->serverSocketPath );
+
+    foreach ( $this->workerProcs as $proc ) {
+      // Kill any stuck processes. They should already have all finished after
+      // the socket was closed, so normally this should not do anything.
+      $proc->stop( 0, SIGTERM );
+    }
   }
 
-  function addJob( $message ) {
-    $this->jobQueue[] = $message;
+  function addJob( $function, $message ) {
+
+    $job = new \SplFixedArray( 2 );
+    $job[ 0 ] = $function;
+    $job[ 1 ] = $message;
+
+    $this->jobQueue[] = $job;
+  }
+
+  function addWorkerInclude( $phpFilePath ) {
+    $this->workerIncludes[] = $phpFilePath;
   }
 
   function getResults() {
@@ -125,8 +135,12 @@ class Server {
       $this->results[ $jobNumber ] = $reader->getBody();
     }
 
-    if ( $headers[ 'cmd' ] === 'new-worker' || $headers[ 'cmd' ] === 'job-result' )
-      $this->sendJobToWorker( $client );
+    if ( $headers[ 'cmd' ] === 'new-worker' || $headers[ 'cmd' ] === 'job-result' ) {
+      $includes = ( $headers[ 'cmd' ] === 'new-worker' )
+        ? $this->workerIncludes
+        : null;
+      $this->sendJobToWorker( $client, $includes );
+    }
 
     $this->closeConnection( $client );
   }
@@ -147,7 +161,7 @@ class Server {
     }
   }
 
-  private function sendJobToWorker( $client ) {
+  private function sendJobToWorker( $client, array $includes = null ) {
 
     if ( $this->sentJobCount >= count( $this->jobQueue ) )
       return;
@@ -155,7 +169,11 @@ class Server {
     $request = new Request( $client );
     $request->setTimeout( self::SOCKET_TIMEOUT_SEND );
     $request->addHeader( 'job-num', $this->sentJobCount );
-    $request->setbody( $this->jobQueue[ $this->sentJobCount ] );
+    if ( $includes )
+      $request->addHeader( 'includes', implode( ',', $includes ) );
+    $job = $this->jobQueue[ $this->sentJobCount ];
+    $request->addHeader( 'function', $job[ 0 ] );
+    $request->setbody( $job[ 1 ] );
     $request->send();
 
     // Job was sent to worker, free memory

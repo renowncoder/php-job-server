@@ -94,10 +94,13 @@ class SocketReader {
     }
 
     // The connection was closed before we got the full response
-    if ( !$headers || $bodyLen < $headers[ 'body-len' ] )
-      throw new \Exception( 'Read failed: socket was closed prematurely' );
-
-    $this->headers = $headers;
-    $this->body = $body;
+    if ( !$headers || $bodyLen < $headers[ 'body-len' ] ) {
+      $this->headers = null;
+      $this->body = null;
+    }
+    else {
+      $this->headers = $headers;
+      $this->body = $body;
+    }
   }
 }
