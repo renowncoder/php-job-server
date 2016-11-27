@@ -12,6 +12,10 @@
 //   - pass the callback the Request, and maybe a SocketWriter (or make the callback return a Response|null)
 // - implement BlockingEventLoop and NonBlockingEventLoop (with stream_select()) to test performance diff (if any)
 //
+// https://www.reddit.com/r/programming/comments/3vzepv/the_difference_between_asynchronous_and/
+// 
+// "An example I can think of is POSIX's select() interface. It should be relatively easy to write wrapper code around it such that reads and writes from and to a number of file descriptors are queued and then when those operations are completed events would be generated. What happens to those events can vary depending on the interface's design goals. An obvious choice would be to call any callback functions that the user of such an interface may have provided."
+// 
 
 namespace Crusse\JobServer;
 
