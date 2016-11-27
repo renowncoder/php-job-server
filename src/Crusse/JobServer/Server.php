@@ -27,12 +27,13 @@ worker3: 1ms to finish
 
 server reads result: 0.5ms (r)
 server writes new job: 0.5ms (w)
-cpu-time available for non-i/o work: 1ms (+)
+cpu time available for extra non-i/o work: (+)
+waiting for i/o: (.)
 
 time:     0     1     2     3     4     5     6     7
 worker1:  rrrwww                  rrrwww
-worker2:        rrrwww            *     rrrwww
-worker3:              rrrwww      *           rrrwww
+worker2:  ......rrrwww            ......rrrwww
+worker3:  ............rrrwww      ............rrrwww
 server:                     ++++++
 
 -----------------------------------------------------------
@@ -45,19 +46,22 @@ worker3: 1ms to finish
 
 server reads result: 0.5ms (r)
 server writes new job: 0.5ms (w)
-cpu-time available for non-i/o work: 1ms (+)
+cpu time available for extra non-i/o work: (+)
+waiting for i/o: (.)
 
 time:     0     1     2     3     4     5     6     7
-worker1:  r  r  r  w  w  w                  r r rwww
-worker2:   r  r  r  w  w  w            r rrw w w
-worker3:    r  r  r  w  w  w      rrrww w
+worker1:  r++r++r++w++w++w                  r+r+rwww
+worker2:   r++r++r++w++w++w            r+rrw+w+w
+worker3:    r++r++r++w++w++w      rrrww+w
 server:                     ++++++
 
 -----------------------------------------------------------
 
-Concurrency doesn't increase throughput but improves latency?
-Usually people say concurrency makes for more efficient processing, because the process is not waiting for I/O. Maybe that's 'asynchronicity', not 'concurrency'...
-
+Server has as much free cpu time available for non-io work in
+blocking and non-blocking versions, because it's the bottleneck.
+It's the workers that are usually waiting for i/o, so in their
+case using non-blocking i/o allows them to process other stuff
+in the midst of doing i/o.
 
 */
 
