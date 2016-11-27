@@ -1,5 +1,18 @@
 <?php
 
+//
+// TODO
+//
+// http://docs.libuv.org/en/v1.x/design.html
+//
+// "The event loop follows the rather usual single threaded asynchronous I/O approach: all (network) I/O is performed on non-blocking sockets. As part of a loop iteration **the loop will block waiting for I/O activity on sockets which have been added to the poller** and callbacks will be fired indicating socket conditions (readable, writable hangup) so handles can read, write or perform the desired I/O operation."
+//
+// - create a watchSocket() method for adding server and client sockets
+// - emit events (run eventCallback with a 'writable' event) when a socket has sent a _full_ Request, and becomes writable
+//   - pass the callback the Request, and maybe a SocketWriter (or make the callback return a Response|null)
+// - implement BlockingEventLoop and NonBlockingEventLoop (with stream_select()) to test performance diff (if any)
+//
+
 namespace Crusse\JobServer;
 
 class EventLoop {
