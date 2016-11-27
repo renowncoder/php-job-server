@@ -38,7 +38,26 @@ server:                     ......
 
 -----------------------------------------------------------
 
-Non-blocking i/o:
+Non-blocking i/o (perfectly synchronized):
+
+worker1: 2ms to finish
+worker2: 2ms to finish
+worker3: 2ms to finish
+
+server reads result: 0.5ms (r)
+server writes new job: 0.5ms (w)
+cpu time available for extra non-i/o work: (+)
+waiting for i/o: (.)
+
+time:     0     1     2     3     4     5     6     7
+worker1:  r++r++r++w++w++w            r++r++r++w++w++w
+worker2:   r++r++r++w++w++w            r++r++r++w++w++w
+worker3:    r++r++r++w++w++w            r++r++r++w++w++w
+server:                     ++++++++++
+
+-----------------------------------------------------------
+
+Non-blocking i/o (not synchronized):
 
 worker1: 3ms to finish
 worker2: 2ms to finish
@@ -156,7 +175,6 @@ class Server {
 
     if ( !$this->serverSocket )
       throw new \Exception( 'Could not create a server: ('. $errNum .') '. $errStr );
-
   }
 
   private function createWorkerProcs( $count ) {
@@ -174,7 +192,6 @@ class Server {
       $process->start();
       $workers[] = $process;
     }
-
 
     $this->workerProcs = $workers;
   }
