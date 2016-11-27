@@ -34,7 +34,7 @@ time:     0     1     2     3     4     5     6     7
 worker1:  rrrwww                  rrrwww
 worker2:  ......rrrwww            ......rrrwww
 worker3:  ............rrrwww      ............rrrwww
-server:                     ++++++
+server:                     ......
 
 -----------------------------------------------------------
 
@@ -55,13 +55,6 @@ worker2:   r++r++r++w++w++w            r+rrw+w+w
 worker3:    r++r++r++w++w++w      rrrww+w
 server:                     ++++++
 
------------------------------------------------------------
-
-Server has as much free cpu time available for non-io work in
-blocking and non-blocking versions, because it's the bottleneck.
-It's the workers that are usually waiting for i/o, so in their
-case using non-blocking i/o allows them to process other stuff
-in the midst of doing i/o.
 
 */
 
