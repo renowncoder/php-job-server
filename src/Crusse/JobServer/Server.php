@@ -1,5 +1,66 @@
 <?php
 
+/*
+
+
+Blocking i/o (perfectly synchronized):
+
+worker1: 2ms to finish
+worker2: 2ms to finish
+worker3: 2ms to finish
+
+server reads result: 0.5ms (r)
+server writes new job: 0.5ms (w)
+
+time:     0     1     2     3     4     5     6     7
+worker1:  rrrwww            rrrwww
+worker2:        rrrwww            rrrwww
+worker3:              rrrwww            rrrwww
+
+-----------------------------------------------------------
+
+Blocking i/o (not synchronized):
+
+worker1: 3ms to finish
+worker2: 2ms to finish
+worker3: 1ms to finish
+
+server reads result: 0.5ms (r)
+server writes new job: 0.5ms (w)
+cpu-time available for non-i/o work: 1ms (+)
+
+time:     0     1     2     3     4     5     6     7
+worker1:  rrrwww                  rrrwww
+worker2:        rrrwww            *     rrrwww
+worker3:              rrrwww      *           rrrwww
+server:                     ++++++
+
+-----------------------------------------------------------
+
+Non-blocking i/o:
+
+worker1: 3ms to finish
+worker2: 2ms to finish
+worker3: 1ms to finish
+
+server reads result: 0.5ms (r)
+server writes new job: 0.5ms (w)
+cpu-time available for non-i/o work: 1ms (+)
+
+time:     0     1     2     3     4     5     6     7
+worker1:  r  r  r  w  w  w                  r r rwww
+worker2:   r  r  r  w  w  w            r rrw w w
+worker3:    r  r  r  w  w  w      rrrww w
+server:                     ++++++
+
+-----------------------------------------------------------
+
+Concurrency doesn't increase throughput but improves latency?
+Usually people say concurrency makes for more efficient processing, because the process is not waiting for I/O. Maybe that's 'asynchronicity', not 'concurrency'...
+
+
+*/
+
 namespace Crusse\JobServer;
 
 use Symfony\Component\Process\Process;
@@ -121,6 +182,18 @@ class Server {
     $this->workerProcs = $workers;
   }
 
+  private function handleWorkerRequests() {
+
+  }
+
+  private function eventLoopTickCallback( $event ) {
+    
+    if ( count( $this->results ) >= count( $this->jobQueue ) )
+      return null;
+
+    return true;
+  }
+
   private function handleRequest( $client ) {
 
     $reader = new SocketReader( $client );
@@ -146,22 +219,6 @@ class Server {
     }
 
     $this->closeConnection( $client );
-  }
-
-  private function handleWorkerRequests() {
-
-    while ( true ) {
-
-      $client = stream_socket_accept( $this->serverSocket, $this->workerTimeout, $peerName );
-
-      if ( !$client )
-        throw new \Exception( 'Reached worker timeout ('. $this->workerTimeout .')' );
-
-      $this->handleRequest( $client );
-
-      if ( count( $this->results ) >= count( $this->jobQueue ) )
-        break;
-    }
   }
 
   private function sendJobToWorker( $client, array $includes = null ) {
