@@ -171,8 +171,8 @@ class Server {
   const SOCKET_TIMEOUT_RECV = 3;
   const SOCKET_TIMEOUT_SEND = 3;
 
-  private $serverSocketPath;
-  private $serverSocket;
+  private $serverStreamPath;
+  private $serverStream;
   private $workerCount;
   private $workerProcs = array();
   private $workerIncludes = array();
@@ -191,10 +191,8 @@ class Server {
 
   function __destruct() {
 
-    $this->closeConnection( $this->serverSocket );
-
-    if ( $this->serverSocketPath )
-      unlink( $this->serverSocketPath );
+    if ( $this->serverStreamPath )
+      unlink( $this->serverStreamPath );
 
     foreach ( $this->workerProcs as $proc ) {
       // Kill any stuck processes. They should already have all finished after
@@ -220,18 +218,21 @@ class Server {
 
     try {
 
-      if ( !$this->serverSocket )
-        $this->createServerSocket();
+      if ( !$this->serverStream )
+        $this->createServerStream();
       if ( !$this->workerProcs )
         $this->createWorkerProcs( $this->workerCount );
 
-      $this->handleWorkerRequests();
+      $loop = new EventLoop( false );
+      $loop->addServerStream( $this->serverStream );
+      $loop->subscribe( array( $this, '_messageCallback' ) );
+      $loop->run();
     }
     catch ( \Exception $e ) {
 
       // Make sure the socket file is deleted
-      if ( $this->serverSocketPath )
-        unlink( $this->serverSocketPath );
+      if ( $this->serverStreamPath )
+        unlink( $this->serverStreamPath );
 
       throw $e;
     }
@@ -247,17 +248,17 @@ class Server {
     $this->workerTimeout = (int) $timeout;
   }
 
-  private function createServerSocket() {
+  private function createServerStream() {
 
     $tmpDir = sys_get_temp_dir();
     if ( !$tmpDir )
       throw new \Exception( 'Could not find the system temporary files directory' );
 
-    $this->serverSocketPath = $tmpDir .'/php_job_server_'. md5( uniqid( true ) ) .'.sock';
-    @unlink( $this->serverSocketPath );
-    $this->serverSocket = stream_socket_server( 'unix://'. $this->serverSocketPath, $errNum, $errStr );
+    $this->serverStreamPath = $tmpDir .'/php_job_server_'. md5( uniqid( true ) ) .'.sock';
+    @unlink( $this->serverStreamPath );
+    $this->serverStream = stream_socket_server( 'unix://'. $this->serverStreamPath, $errNum, $errStr );
 
-    if ( !$this->serverSocket )
+    if ( !$this->serverStream )
       throw new \Exception( 'Could not create a server: ('. $errNum .') '. $errStr );
   }
 
@@ -269,8 +270,8 @@ class Server {
       // We use 'nice' to make the worker process slightly lower priority than
       // regular PHP processes that are run by the web server, so that the
       // worker's don't bring down the web server so easily
-      $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .'/worker_process.php \''.
-        $this->serverSocketPath .'\'' );
+      $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .
+        '/worker_process.php \'unix://'. $this->serverStreamPath .'\'' );
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();
       $process->start();
@@ -280,70 +281,42 @@ class Server {
     $this->workerProcs = $workers;
   }
 
-  private function handleWorkerRequests() {
+  function _messageCallback( Message $message, EventLoop $loop, $stream ) {
 
-  }
-
-  private function eventLoopTickCallback( $event ) {
-    
-    if ( count( $this->results ) >= count( $this->jobQueue ) )
-      return null;
-
-    return true;
-  }
-
-  private function handleRequest( $client ) {
-
-    $reader = new SocketReader( $client );
-    $reader->setTimeout( self::SOCKET_TIMEOUT_RECV );
-    $headers = $reader->getHeaders();
-
-    if ( !$headers )
-      throw new \Exception( 'Worker unexpectedly closed connection' );
+    $headers = $message->headers;
 
     if ( !isset( $headers[ 'cmd' ] ) || !strlen( $headers[ 'cmd' ] ) )
       throw new \Exception( 'Missing header "cmd"' );
 
     if ( $headers[ 'cmd' ] === 'job-result' ) {
       $jobNumber = $headers[ 'job-num' ];
-      $this->results[ $jobNumber ] = $reader->getBody();
+      $this->results[ $jobNumber ] = $message->body;
     }
 
-    if ( $headers[ 'cmd' ] === 'new-worker' || $headers[ 'cmd' ] === 'job-result' ) {
-      $includes = ( $headers[ 'cmd' ] === 'new-worker' )
-        ? $this->workerIncludes
-        : null;
-      $this->sendJobToWorker( $client, $includes );
+    // We have all the results; stop the event loop
+    if ( count( $this->results ) >= count( $this->jobQueue ) ) {
+      
+      $loop->stop();
     }
+    // Send a job to the worker
+    else if ( $this->sentJobCount < count( $this->jobQueue ) ) {
 
-    $this->closeConnection( $client );
-  }
+      $message = new Message();
 
-  private function sendJobToWorker( $client, array $includes = null ) {
+      if ( $headers[ 'cmd' ] === 'new-worker' )
+        $message->headers[ 'includes' ] = implode( ',', $this->workerIncludes );
 
-    if ( $this->sentJobCount >= count( $this->jobQueue ) )
-      return;
+      $message->headers[ 'job-num' ] = $this->sentJobCount;
+      $job = $this->jobQueue[ $this->sentJobCount ];
+      $message->headers[ 'function' ] = $job[ 0 ];
+      $message->body = $job[ 1 ];
 
-    $request = new SocketWriter( $client );
-    $request->setTimeout( self::SOCKET_TIMEOUT_SEND );
-    $request->addHeader( 'job-num', $this->sentJobCount );
-    if ( $includes )
-      $request->addHeader( 'includes', implode( ',', $includes ) );
-    $job = $this->jobQueue[ $this->sentJobCount ];
-    $request->addHeader( 'function', $job[ 0 ] );
-    $request->setBody( $job[ 1 ] );
-    $request->write();
+      // Job was sent to worker, free memory
+      $this->jobQueue[ $this->sentJobCount ] = '';
+      $this->sentJobCount++;
 
-    // Job was sent to worker, free memory
-    $this->jobQueue[ $this->sentJobCount ] = '';
-    $this->sentJobCount++;
-  }
-
-  private function closeConnection( $client ) {
-
-    // Close the connection until the worker client sends us a new result
-    stream_socket_shutdown( $client, STREAM_SHUT_RDWR );
-    fclose( $client );
+      $loop->send( $stream, $message );
+    }
   }
 }
 

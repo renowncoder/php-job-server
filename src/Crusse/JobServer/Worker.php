@@ -4,86 +4,63 @@ namespace Crusse\JobServer;
 
 // Including these directly, and not via autoloading, as we might not have an
 // autoloader in the current context
-require_once dirname( __FILE__ ) .'/SocketWriter.php';
-require_once dirname( __FILE__ ) .'/SocketReader.php';
+require_once dirname( __FILE__ ) .'/EventLoop.php';
+require_once dirname( __FILE__ ) .'/Message.php';
+require_once dirname( __FILE__ ) .'/MessageBuffer.php';
 
 class Worker {
 
-  // Timeouts for sending/receiving to/from the job server socket
-  const CONNECT_TIMEOUT = 5;
-  const SEND_TIMEOUT = 3;
-  const RECV_TIMEOUT = 3;
+  const CONNECT_TIMEOUT = 3;
 
-  private $serverSocketPath;
+  private $serverSocketAddr;
 
-  function __construct( $serverSocketPath ) {
+  function __construct( $serverSocketAddr ) {
 
-    $this->serverSocketPath = $serverSocketPath;
+    $this->serverSocketAddr = $serverSocketAddr;
   }
 
   function run() {
 
-    $response = $this->sendMessage( 'new-worker' );
+    $stream = stream_socket_client( $this->serverSocketAddr, $errNum,
+      $errStr, self::CONNECT_TIMEOUT );
 
-    while ( $response ) {
-      $response = $this->handleServerResponse( $response );
-    }
+    if ( !$stream || $errNum != 0 )
+      throw new \Exception( 'Could not create socket client: ('. $errNum .') '. $errStr );
+
+    $loop = new EventLoop( false );
+    $loop->subscribe( array( $this, '_messageCallback' ) );
+    $loop->addClientStream( $stream );
+    $this->sendMessage( $loop, $stream, 'new-worker' );
+    $loop->run();
   }
 
-  private function handleServerResponse( SocketReader $response ) {
+  function _messageCallback( Message $message, EventLoop $loop, $stream ) {
 
-    $headers = $response->getHeaders();
+    $headers = $message->headers;
 
-    // No response from server
-    if ( !$headers )
-      return null;
-
-    if ( isset( $headers[ 'includes' ] ) )
-      $this->includePhpSources( $headers[ 'includes' ] );
+    if ( isset( $headers[ 'includes' ] ) ) {
+      foreach ( explode( ',', $headers[ 'includes' ] ) as $path )
+        require_once $path;
+    }
 
     if ( !isset( $headers[ 'function' ] ) )
       throw new \Exception( 'Request has no \'function\' header' );
     if ( !is_callable( $headers[ 'function' ] ) )
       throw new \Exception( '\''. $headers[ 'function' ] .'\' is not callable' );
 
-    $result = call_user_func( $headers[ 'function' ], $response->getBody() );
-    $response = $this->sendMessage( 'job-result', $headers[ 'job-num' ], $result );
-
-    return $response;
+    $result = call_user_func( $headers[ 'function' ], $message->body );
+    $this->sendMessage( $loop, $stream, 'job-result', $headers[ 'job-num' ], $result );
   }
 
-  private function includePhpSources( $paths ) {
+  private function sendMessage( EventLoop $loop, $stream, $cmd, $jobNumber = null, $body = '' ) {
 
-    foreach ( explode( ',', $paths ) as $path )
-      require_once $path;
-  }
-
-  private function sendMessage( $cmd, $jobNumber = null, $body = '' ) {
-
-    $server = $this->getSocketClient();
-
-    $request = new SocketWriter( $server );
-    $request->setTimeout( self::SEND_TIMEOUT );
-    $request->addHeader( 'cmd', $cmd );
+    $message = new Message();
+    $message->headers[ 'cmd' ] = $cmd;
     if ( $jobNumber !== null )
-      $request->addHeader( 'job-num', $jobNumber );
-    $request->setBody( $body );
-    $request->write();
+      $message->headers[ 'job-num' ] = $jobNumber;
+    $message->body = $body;
 
-    $responseReader = new SocketReader( $server );
-    $responseReader->setTimeout( self::RECV_TIMEOUT );
-
-    return $responseReader;
-  }
-
-  private function getSocketClient() {
-
-    $server = stream_socket_client( 'unix://'. $this->serverSocketPath, $errNum,
-      $errStr, self::CONNECT_TIMEOUT );
-
-    if ( !$server || $errNum != 0 )
-      throw new \Exception( 'Could not create socket client: ('. $errNum .') '. $errStr );
-
-    return $server;
+    $loop->send( $stream, $message );
   }
 }
+

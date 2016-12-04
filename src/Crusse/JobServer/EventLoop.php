@@ -8,8 +8,8 @@
 // "The event loop follows the rather usual single threaded asynchronous I/O approach: all (network) I/O is performed on non-blocking sockets. As part of a loop iteration **the loop will block waiting for I/O activity on sockets which have been added to the poller** and callbacks will be fired indicating socket conditions (readable, writable hangup) so handles can read, write or perform the desired I/O operation."
 //
 // - create a watchSocket() method for adding server and client sockets
-// - emit events (run eventCallback with a 'writable' event) when a socket has sent a _full_ Request, and becomes writable
-//   - pass the callback the Request, and maybe a SocketWriter (or make the callback return a Response|null)
+// - emit events (run eventCallback with a 'writable' event) when a socket has sent a _full_ Message, and becomes writable
+//   - pass the callback the Message, and maybe a SocketWriter (or make the callback return a Response|null)
 // - implement BlockingEventLoop and NonBlockingEventLoop (with stream_select()) to test performance diff (if any)
 //
 // https://www.reddit.com/r/programming/comments/3vzepv/the_difference_between_asynchronous_and/
@@ -21,118 +21,280 @@ namespace Crusse\JobServer;
 
 class EventLoop {
 
-  private $listenStream;
-  private $eventCallback;
-  private $timeout = 60;
-  
-  function __construct( $listenStream ) {
+  private $serverStream;
+  private $acceptTimeout = 60;
+  private $callbacks = array();
+  private $streams = array();
+  private $blocking = true;
+  private $stop = false;
+
+  function __construct( $blockingIo ) {
     
-    $this->listenStream = $listenStream;
+    $this->blocking = (bool) $blockingIo;
   }
 
-  private function tick() {
-
-    $client = stream_socket_accept( $this->listenStream, $this->timeout );
-
-    if ( !$client )
-      throw new \Exception( 'Reached idle timeout ('. $this->timeout .')' );
-
-    $request = $this->getRequestFromClientStream( $client );
-
-    return call_user_func( $this->eventCallback, $request );
-  }
-
-  function run( $eventCallback ) {
-
-    $this->eventCallback = $eventCallback;
+  function addClientStream( $stream, $readTimeout = 2, $writeTimeout = 2 ) {
     
-    while ( true ) {
-      if ( !$this->tick() )
+    if ( !is_resource( $stream ) )
+      throw new \InvalidArgumentException( '$stream is not a resource' );
+    
+    stream_set_blocking( $stream, $this->blocking );
+    $socket = socket_import_stream( $stream );
+    socket_set_option( $socket, SOL_SOCKET, SO_RCVTIMEO, array( 'sec' => $readTimeout, 'usec' => 0 ) );
+    socket_set_option( $socket, SOL_SOCKET, SO_SNDTIMEO, array( 'sec' => $writeTimeout, 'usec' => 0 ) );
+
+    $foundSpot = false;
+    $streamCount = count( $this->streams );
+
+    // Reuse array keys, instead of always pushing to the array with an
+    // incrementing key, so that we don't have large integer keys. We don't use
+    // array_unshift when removing streams, as it's slow, so we use unset() 
+    // instead.
+    for ( $i = 0; $i < $streamCount; $i++ ) {
+      if ( !isset( $this->streams[ $i ] ) ) {
+        $foundSpot = true;
+        $this->streams[ $i ] = $stream;
         break;
-    }
-  }
-
-  private function getRequestFromClientStream( $stream ) {
-
-    $request = new Request();
-    $request->stream = $stream;
-
-    while ( $this->populateRequestFromStream( $stream, $request ) ) {}
-
-    // Free memory
-    unset( $request->headerBuffer );
-    unset( $request->headerEnd );
-    unset( $request->bodyLen );
-
-    // The connection was closed before we got the full response
-    if ( !$request->valid )
-      throw new \Exception( 'Stream was closed unexpectedly' );
-
-    return $request;
-  }
-
-  private function populateRequestFromStream( $stream, &$request ) {
-
-    $data = stream_socket_recvfrom( $stream, 1500 );
-    $dataLen = strlen( $data );
-
-    // Connection was dropped by the receiver, or the socket receive timed out
-    if ( !$dataLen )
-      return false;
-
-    $request->headerBuffer .= $data;
-
-    // We already have the header. Add further data to body.
-    if ( $request->headerEnd !== false ) {
-      
-      $request->body .= $data;
-      $request->bodyLen += $dataLen;
-      
-      if ( $request->bodyLen >= $request->headers[ 'body-len' ] ) {
-        $request->valid = true;
-        return false;
       }
     }
-    // We're reading the header of the request
+
+    if ( !$foundSpot )
+      $this->streams[] = $stream;
+
+    $this->readBuffer[ $i ] = new MessageBuffer();
+    $this->writeBuffer[ $i ] = '';
+  }
+
+  function addServerStream( $stream, $acceptTimeout = 60 ) {
+    
+    if ( !is_resource( $stream ) )
+      throw new \InvalidArgumentException( '$stream is not a resource' );
+
+    stream_set_blocking( $stream, $this->blocking );
+
+    $this->serverStream = $stream;
+    $this->acceptTimeout = (int) $acceptTimeout;
+  }
+
+  function subscribe( $callable ) {
+    
+    if ( !is_callable( $callable ) )
+      throw new \InvalidArgumentException( '$callable is not callable' );
+
+    $this->callbacks[] = $callable;
+  }
+
+  function send( $stream, Message $message ) {
+
+    if ( $this->stop )
+      throw new \LogicException( 'Calling send() after stop() is redundant' );
+    
+    $streamIndex = array_search( $stream, $this->streams, true );
+    
+    if ( $streamIndex === false )
+      throw new \InvalidArgumentException( 'No valid socket stream given' );
+
+    $this->writeBuffer[ $streamIndex ] .= (string) $message;
+  }
+
+  function run() {
+
+    while ( true ) {
+
+      $readables = $this->streams;
+      if ( $this->serverStream )
+        $readables[] = $this->serverStream;
+      $writables = $this->streams;
+      $nullVar = null;
+
+      $changedStreams = stream_select( $readables, $writables, $nullVar, $this->acceptTimeout );
+
+      // TODO: can it happen that $changedStreams === 0 and $readables is not empty?
+      if ( !$changedStreams )
+        throw new \Exception( 'select() timed out' );
+
+      // When we're stopping the loop, write all remaining buffer out, but
+      // don't receive anything in anymore
+      if ( $readables && !$this->stop )
+        $this->handleReadableStreams( $readables );
+
+      if ( $writables )
+        $this->handleWritableStreams( $writables );
+
+      // Exit the loop when all writes have been done
+      if ( $this->stop && !array_filter( $this->writeBuffer ) )
+        break;
+    }
+
+    foreach ( $this->streams as $stream )
+      $this->closeConnection( $stream );
+    $this->streams = array();
+
+    if ( $this->serverStream )
+      $this->closeConnection( $this->serverStream );
+    unset( $this->serverStream );
+  }
+
+  function stop() {
+    
+    $this->stop = true;
+  }
+
+  private function handleReadableStreams( $streams ) {
+
+    if ( in_array( $this->serverStream, $streams ) )
+      $this->acceptClient();
+
+    foreach ( $streams as $stream ) {
+
+      if ( $stream === $this->serverStream )
+        continue;
+
+      $messages = $this->getMessagesFromStream( $stream );
+
+      if ( !$messages )
+        continue;
+
+      foreach ( $messages as $message ) {
+        foreach ( $this->callbacks as $callback ) {
+          call_user_func( $callback, $message, $this, $stream );
+        }
+      }
+    }
+  }
+
+  private function handleWritableStreams( $streams ) {
+
+    foreach ( $streams as $stream ) {
+
+      $streamIndex = array_search( $stream, $this->streams, true );
+      $buffer = $this->writeBuffer[ $streamIndex ];
+      $bufferLen = strlen( $buffer );
+      $sentBytes = stream_socket_sendto( $stream, $buffer );
+
+      if ( $sentBytes < 0 )
+        throw new \Exception( 'Could not write to socket' );
+      
+      $this->writeBuffer[ $streamIndex ] = substr( $buffer, $sentBytes );
+    }
+  }
+
+  private function acceptClient() {
+
+    $stream = stream_socket_accept( $this->serverStream, $this->acceptTimeout );
+
+    if ( !$stream )
+      throw new \Exception( 'Reached listen timeout ('. $this->acceptTimeout .')' );
+
+    $this->addClientStream( $stream );
+
+    return $stream;
+  }
+
+  /**
+   * Returns one or more Messages from the stream. Reading from the stream
+   * might return multiple messages, and in that case this function will
+   * conserve message boundaries and return each message as a Message.
+   *
+   * @return array Array of Message objects. Can be empty.
+   */
+  private function getMessagesFromStream( $stream ) {
+
+    $streamIndex = array_search( $stream, $this->streams, true );
+    $buffer = $this->readBuffer[ $streamIndex ];
+
+    // Populate the MessageBuffer from the stream
+
+    if ( $this->blocking ) {
+      do {
+        $data = stream_socket_recvfrom( $stream, 1500 );
+        $this->populateMessageBuffer( $data, $buffer );
+      }
+      while ( !$buffer->hasMessage );
+    }
+    else {
+      $data = stream_socket_recvfrom( $stream, 1500 );
+      $this->populateMessageBuffer( $data, $buffer );
+    }
+
+    // Get finished Message objects from the MessageBuffer
+
+    $messages = array();
+
+    while ( $buffer->hasMessage ) {
+
+      $messages[] = $buffer->message;
+      // Check if we received multiple messages' data from the stream
+      $overflowBytes = $buffer->bodyLen - $buffer->message->headers[ 'body-len' ];
+      
+      // We got more bytes than the message consists of, so we got (possibly
+      // partially) other messages' data
+      if ( $overflowBytes > 0 ) {
+
+        $overflow = substr( $buffer->message->body, -$overflowBytes );
+        $buffer->message->body .= substr( $buffer->message->body, 0, -$overflowBytes );
+        $messages[] = $buffer->message;
+
+        $buffer = new MessageBuffer();
+        $this->readBuffer[ $streamIndex ] = $buffer;
+
+        $this->populateMessageBuffer( $overflow, $buffer );
+      }
+      // We got the whole message, and nothing more (no overflow to the next message)
+      else {
+
+        $buffer = new MessageBuffer();
+        $this->readBuffer[ $streamIndex ] = $buffer;
+      }
+    }
+
+    return $messages;
+  }
+
+  private function populateMessageBuffer( $data, MessageBuffer &$buffer ) {
+
+    // We already have the header. Add further data to body.
+    if ( $buffer->headerEnd !== false ) {
+      
+      $dataLen = strlen( $data );
+      $buffer->bodyLen += $dataLen;
+      $buffer->message->body .= $data;
+      
+      if ( $buffer->bodyLen >= $buffer->message->headers[ 'body-len' ] )
+        $buffer->hasMessage = true;
+    }
+    // We're reading the header of the message
     else {
 
-      $request->headerEnd = strpos( $request->headerBuffer, "\n\n" );
+      $buffer->headerBuffer .= $data;
+      $buffer->headerEnd = strpos( $buffer->headerBuffer, "\n\n" );
 
-      if ( $request->headerEnd !== false ) {
+      if ( $buffer->headerEnd !== false ) {
 
-        $headerLines = array_filter( explode( "\n", substr( $request->headerBuffer, 0, $request->headerEnd ) ) );
+        $headerLines = array_filter( explode( "\n", substr( $buffer->headerBuffer, 0, $buffer->headerEnd ) ) );
 
         foreach ( $headerLines as $line ) {
           $colonPos = strpos( $line, ':' );
           $key = substr( $line, 0, $colonPos );
           $val = substr( $line, $colonPos + 1 );
-          $request->headers[ $key ] = $val;
+          $buffer->message->headers[ $key ] = $val;
         }
 
-        $bodyPart = substr( $headerBuffer, $headerEnd + 2 );
-        $request->body .= $bodyPart;
-        $bodyLen += strlen( $bodyPart );
+        $bodyPart = substr( $buffer->headerBuffer, $buffer->headerEnd + 2 );
+        $buffer->message->body .= $bodyPart;
+        $buffer->bodyLen += strlen( $bodyPart );
 
-        if ( $request->bodyLen >= $request->headers[ 'body-len' ] ) {
-          $request->valid = true;
-          return false;
-        }
+        if ( $buffer->bodyLen >= $buffer->message->headers[ 'body-len' ] )
+          $buffer->hasMessage = true;
       }
     }
-
-    return true;
   }
-}
 
-class Request {
+  private function closeConnection( $stream ) {
 
-  public $stream;
-  public $headers = array();
-  public $body = '';
-  public $valid = false;
-
-  public $headerBuffer = '';
-  public $headerEnd = false;
-  public $bodyLen = 0;
+    // Close the connection until the worker client sends us a new result
+    stream_socket_shutdown( $stream, STREAM_SHUT_RDWR );
+    fclose( $stream );
+  }
 }
 

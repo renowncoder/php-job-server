@@ -7,7 +7,7 @@ $timeTotal = microtime( true );
 $server = new Crusse\JobServer\Server( 3 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 
-for ( $i = 0; $i < 30; $i++ )
+for ( $i = 0; $i < 10000; $i++ )
   $server->addJob( 'job_test', 'Job '. $i );
 
 $time = microtime( true );
