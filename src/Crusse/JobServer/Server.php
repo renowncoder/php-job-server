@@ -223,7 +223,7 @@ class Server {
       if ( !$this->workerProcs )
         $this->createWorkerProcs( $this->workerCount );
 
-      $loop = new EventLoop( false );
+      $loop = new EventLoop( true );
       $loop->addServerStream( $this->serverStream );
       $loop->subscribe( array( $this, '_messageCallback' ) );
       $loop->run();

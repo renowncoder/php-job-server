@@ -205,17 +205,8 @@ class EventLoop {
 
     // Populate the MessageBuffer from the stream
 
-    if ( $this->blocking ) {
-      do {
-        $data = stream_socket_recvfrom( $stream, 1500 );
-        $this->populateMessageBuffer( $data, $buffer );
-      }
-      while ( !$buffer->hasMessage );
-    }
-    else {
-      $data = stream_socket_recvfrom( $stream, 1500 );
-      $this->populateMessageBuffer( $data, $buffer );
-    }
+    $data = stream_socket_recvfrom( $stream, 1500 );
+    $this->populateMessageBuffer( $data, $buffer );
 
     // Get finished Message objects from the MessageBuffer
 

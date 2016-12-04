@@ -27,7 +27,7 @@ class Worker {
     if ( !$stream || $errNum != 0 )
       throw new \Exception( 'Could not create socket client: ('. $errNum .') '. $errStr );
 
-    $loop = new EventLoop( false );
+    $loop = new EventLoop( true );
     $loop->subscribe( array( $this, '_messageCallback' ) );
     $loop->addClientStream( $stream );
     $this->sendMessage( $loop, $stream, 'new-worker' );
