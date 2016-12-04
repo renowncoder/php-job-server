@@ -1,22 +1,5 @@
 <?php
 
-//
-// TODO
-//
-// http://docs.libuv.org/en/v1.x/design.html
-//
-// "The event loop follows the rather usual single threaded asynchronous I/O approach: all (network) I/O is performed on non-blocking sockets. As part of a loop iteration **the loop will block waiting for I/O activity on sockets which have been added to the poller** and callbacks will be fired indicating socket conditions (readable, writable hangup) so handles can read, write or perform the desired I/O operation."
-//
-// - create a watchSocket() method for adding server and client sockets
-// - emit events (run eventCallback with a 'writable' event) when a socket has sent a _full_ Message, and becomes writable
-//   - pass the callback the Message, and maybe a SocketWriter (or make the callback return a Response|null)
-// - implement BlockingEventLoop and NonBlockingEventLoop (with stream_select()) to test performance diff (if any)
-//
-// https://www.reddit.com/r/programming/comments/3vzepv/the_difference_between_asynchronous_and/
-// 
-// "An example I can think of is POSIX's select() interface. It should be relatively easy to write wrapper code around it such that reads and writes from and to a number of file descriptors are queued and then when those operations are completed events would be generated. What happens to those events can vary depending on the interface's design goals. An obvious choice would be to call any callback functions that the user of such an interface may have provided."
-// 
-
 namespace Crusse\JobServer;
 
 class EventLoop {
@@ -31,6 +14,7 @@ class EventLoop {
   function __construct( $blockingIo ) {
     
     $this->blocking = (bool) $blockingIo;
+    file_put_contents( '/tmp/crusse-job-server.log', '' );
   }
 
   function addClientStream( $stream, $readTimeout = 2, $writeTimeout = 2 ) {
@@ -86,18 +70,24 @@ class EventLoop {
 
   function send( $stream, Message $message ) {
 
-    if ( $this->stop )
+    if ( $this->stop ) {
+      $this->log( 'Error: called send() after stop()' );
       throw new \LogicException( 'Calling send() after stop() is redundant' );
+    }
     
     $streamIndex = array_search( $stream, $this->streams, true );
     
-    if ( $streamIndex === false )
+    if ( $streamIndex === false ) {
+      $this->log( 'Error: $stream was not found in list of clients' );
       throw new \InvalidArgumentException( 'No valid socket stream given' );
+    }
 
     $this->writeBuffer[ $streamIndex ] .= (string) $message;
   }
 
   function run() {
+
+    $this->log( 'Using select() timeout of '. $this->acceptTimeout .' s' );
 
     while ( true ) {
 
@@ -110,8 +100,10 @@ class EventLoop {
       $changedStreams = stream_select( $readables, $writables, $nullVar, $this->acceptTimeout );
 
       // TODO: can it happen that $changedStreams === 0 and $readables is not empty?
-      if ( !$changedStreams )
+      if ( !$changedStreams ) {
+        $this->log( 'Error: select() timed out' );
         throw new \Exception( 'select() timed out' );
+      }
 
       // When we're stopping the loop, write all remaining buffer out, but
       // don't receive anything in anymore
@@ -170,11 +162,18 @@ class EventLoop {
       $streamIndex = array_search( $stream, $this->streams, true );
       $buffer = $this->writeBuffer[ $streamIndex ];
       $bufferLen = strlen( $buffer );
+
+      if ( !$bufferLen )
+        continue;
+
       $sentBytes = stream_socket_sendto( $stream, $buffer );
 
-      if ( $sentBytes < 0 )
+      if ( $sentBytes < 0 ) {
+        $this->log( 'Error: could not write to socket: "'. $buffer .'"' );
         throw new \Exception( 'Could not write to socket' );
-      
+      }
+
+      $this->log( 'Sent '. $sentBytes .' b to '. $streamIndex );
       $this->writeBuffer[ $streamIndex ] = substr( $buffer, $sentBytes );
     }
   }
@@ -183,10 +182,13 @@ class EventLoop {
 
     $stream = stream_socket_accept( $this->serverStream, $this->acceptTimeout );
 
-    if ( !$stream )
-      throw new \Exception( 'Reached listen timeout ('. $this->acceptTimeout .')' );
+    if ( !$stream ) {
+      $this->log( 'Error: reached accept timeout' );
+      throw new \Exception( 'Reached accept timeout ('. $this->acceptTimeout .')' );
+    }
 
     $this->addClientStream( $stream );
+    $this->log( 'Accepted client' );
 
     return $stream;
   }
@@ -206,6 +208,7 @@ class EventLoop {
     // Populate the MessageBuffer from the stream
 
     $data = stream_socket_recvfrom( $stream, 1500 );
+    $this->log( 'Recvd '. strlen( $data ) .' b from '. $streamIndex );
     $this->populateMessageBuffer( $data, $buffer );
 
     // Get finished Message objects from the MessageBuffer
@@ -221,6 +224,8 @@ class EventLoop {
       // We got more bytes than the message consists of, so we got (possibly
       // partially) other messages' data
       if ( $overflowBytes > 0 ) {
+
+        $this->log( 'Recvd multiple messages from stream (overflow: '. $overflowBytes .' b)' );
 
         $overflow = substr( $buffer->message->body, -$overflowBytes );
         $buffer->message->body .= substr( $buffer->message->body, 0, -$overflowBytes );
@@ -286,6 +291,11 @@ class EventLoop {
     // Close the connection until the worker client sends us a new result
     stream_socket_shutdown( $stream, STREAM_SHUT_RDWR );
     fclose( $stream );
+  }
+
+  private function log( $msg ) {
+    $prefix = ( $this->serverStream ) ? '[SERVER] ' : '[worker] ';
+    file_put_contents( '/tmp/crusse-job-server.log', $prefix . $msg . PHP_EOL, FILE_APPEND );
   }
 }
 

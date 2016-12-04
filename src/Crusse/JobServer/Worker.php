@@ -13,6 +13,8 @@ class Worker {
   const CONNECT_TIMEOUT = 3;
 
   private $serverSocketAddr;
+  // FIXME: see below
+  private $writeBuffer = array();
 
   function __construct( $serverSocketAddr ) {
 
@@ -27,7 +29,7 @@ class Worker {
     if ( !$stream || $errNum != 0 )
       throw new \Exception( 'Could not create socket client: ('. $errNum .') '. $errStr );
 
-    $loop = new EventLoop( true );
+    $loop = new EventLoop( false );
     $loop->subscribe( array( $this, '_messageCallback' ) );
     $loop->addClientStream( $stream );
     $this->sendMessage( $loop, $stream, 'new-worker' );
@@ -60,7 +62,23 @@ class Worker {
       $message->headers[ 'job-num' ] = $jobNumber;
     $message->body = $body;
 
-    $loop->send( $stream, $message );
+    //$this->writeBuffer[] = $message;
+
+    //// FIXME:
+    //// Just testing what happens at the server when we send multiple messages
+    //// at once. Maybe we could buffer multiple results before sending them back
+    //// to the server kinda like this? How do we know when we've got the last
+    //// job?
+    //if ( count( $this->writeBuffer ) >= 2 ) {
+    //  foreach ( $this->writeBuffer as $msg )
+    //    $loop->send( $stream, $msg );
+    //  $this->writeBuffer = array();
+    //}
+    //else {
+    //  $message = new Message();
+    //  $message->headers[ 'cmd' ] = 'new-worker';
+      $loop->send( $stream, $message );
+    //}
   }
 }
 

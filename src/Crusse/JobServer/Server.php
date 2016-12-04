@@ -167,10 +167,6 @@ use Symfony\Component\Process\Process;
 
 class Server {
 
-  // Timeouts for sending/receiving to/from the worker client sockets
-  const SOCKET_TIMEOUT_RECV = 3;
-  const SOCKET_TIMEOUT_SEND = 3;
-
   private $serverStreamPath;
   private $serverStream;
   private $workerCount;
@@ -223,8 +219,8 @@ class Server {
       if ( !$this->workerProcs )
         $this->createWorkerProcs( $this->workerCount );
 
-      $loop = new EventLoop( true );
-      $loop->addServerStream( $this->serverStream );
+      $loop = new EventLoop( false );
+      $loop->addServerStream( $this->serverStream, $this->workerTimeout );
       $loop->subscribe( array( $this, '_messageCallback' ) );
       $loop->run();
     }
