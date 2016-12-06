@@ -22,7 +22,6 @@ class EventLoop {
 
     $this->serverSocketAddr = $serverSocketAddr;
     $this->blocking = (bool) $blockingIo;
-    file_put_contents( '/tmp/crusse-job-server.log', '' );
   }
 
   function __destruct() {
@@ -83,6 +82,8 @@ class EventLoop {
   }
 
   function listen( $acceptTimeout = 60 ) {
+
+    file_put_contents( '/tmp/crusse-job-server.log', '' );
 
     @unlink( $this->serverSocketAddr );
 

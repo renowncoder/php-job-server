@@ -14,7 +14,7 @@ function generateRandomString($length = 10) {
 
 $timeTotal = microtime( true );
 
-$server = new Crusse\JobServer\Server( 1 );
+$server = new Crusse\JobServer\Server( 3 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 $server->setWorkerTimeout( 3 );
 
