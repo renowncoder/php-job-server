@@ -2,24 +2,29 @@
 
 require_once __DIR__ .'/../vendor/autoload.php';
 
-function generateRandomString($length = 10) {
-	$characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-	$charactersLength = strlen($characters);
-	$randomString = '';
+function generateString($length) {
+
+	static $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+	static $charactersLength = 0;
+
+  if ( !$charactersLength )
+    $charactersLength = strlen($characters);
+
+	$ret = '';
 	for ($i = 0; $i < $length; $i++) {
-		$randomString .= $characters[rand(0, $charactersLength - 1)];
+		$ret .= $characters[$i % $charactersLength];
 	}
-	return $randomString;
+	return $ret;
 }
 
 $timeTotal = microtime( true );
 
-$server = new Crusse\JobServer\Server( 10 );
+$server = new Crusse\JobServer\Server( 4 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 $server->setWorkerTimeout( 2 );
 
-for ( $i = 0; $i < 100; $i++ )
-  $server->addJob( 'job_test', 'Job '. $i .': '. generateRandomString( 10000 ) );
+for ( $i = 0; $i < 1000; $i++ )
+  $server->addJob( 'job_test', 'Job '. $i .': '. generateString( 2000 ) );
 
 $time = microtime( true );
 $res = $server->getResults();

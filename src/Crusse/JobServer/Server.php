@@ -214,7 +214,7 @@ class Server {
 
   function getResults() {
 
-    $loop = new EventLoop( $this->serverSocketAddr, false );
+    $loop = new EventLoop( $this->serverSocketAddr );
     $loop->listen( $this->workerTimeout );
     $loop->subscribe( array( $this, '_messageCallback' ) );
 

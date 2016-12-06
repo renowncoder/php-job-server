@@ -15,20 +15,23 @@ class EventLoop {
   private $acceptTimeout = 60;
   private $callbacks = array();
   private $sockets = array();
-  private $blocking = true;
   private $stop = false;
 
-  function __construct( $serverSocketAddr, $blockingIo ) {
+  function __construct( $serverSocketAddr ) {
 
     $this->serverSocketAddr = $serverSocketAddr;
-    $this->blocking = (bool) $blockingIo;
   }
 
   function __destruct() {
 
+    foreach ( $this->sockets as $socket )
+      $this->closeConnection( $socket );
+
     // If we were listening on a socket, remove the socket file
-    if ( $this->serverSocket )
+    if ( $this->serverSocket ) {
+      $this->closeConnection( $this->serverSocket );
       unlink( $this->serverSocketAddr );
+    }
   }
 
   function connect() {
@@ -46,10 +49,7 @@ class EventLoop {
 
   private function setSocketOptions( $socket ) {
 
-    if ( $this->blocking )
-      socket_set_block( $socket );
-    else
-      socket_set_nonblock( $socket );
+    socket_set_nonblock( $socket );
 
     socket_set_option( $socket, SOL_SOCKET, SO_RCVTIMEO, array( 'sec' => 2, 'usec' => 0 ) );
     socket_set_option( $socket, SOL_SOCKET, SO_SNDTIMEO, array( 'sec' => 2, 'usec' => 0 ) );
@@ -93,10 +93,7 @@ class EventLoop {
     if ( socket_bind( $socket, $this->serverSocketAddr ) === false )
       throw new \Exception( socket_strerror( socket_last_error() ) );
 
-    if ( $this->blocking )
-      socket_set_block( $socket );
-    else
-      socket_set_nonblock( $socket );
+    socket_set_nonblock( $socket );
 
     if ( socket_listen( $socket, self::MAX_LISTEN_CONNECTIONS ) === false )
       throw new \Exception( socket_strerror( socket_last_error() ) );
@@ -136,33 +133,34 @@ class EventLoop {
 
     while ( true ) {
 
+      // We have no more sockets to poll, all have disconnected
+      if ( !$this->sockets && !$this->serverSocket )
+        break;
+
       $readables = $this->sockets;
       if ( $this->serverSocket )
         $readables[] = $this->serverSocket;
       $writables = $this->sockets;
       $nullVar = null;
 
-      $changedSockets = @socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
+      $changedSockets = socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
 
       if ( $changedSockets === 0 ) {
         $this->log( 'Error: select() timed out' );
         throw new \Exception( 'select() timed out' );
       }
       else if ( $changedSockets === false ) {
-        $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+        $this->log( 'Error on select(): '. socket_strerror( socket_last_error() ) );
         throw new \Exception( socket_strerror( socket_last_error() ) );
       }
 
-      // When we're stopping the loop, write all remaining buffer out, but
-      // don't receive anything in anymore
-      if ( $readables && !$this->stop )
+      if ( $readables )
         $this->handleReadableSockets( $readables );
 
       if ( $writables )
         $this->handleWritableSockets( $writables );
 
-      // Exit the loop when all writes have been done
-      if ( $this->stop && !array_filter( $this->writeBuffer ) )
+      if ( $this->stop )
         break;
     }
 
@@ -201,6 +199,9 @@ class EventLoop {
           call_user_func( $callback, $message, $this, $socket );
         }
       }
+
+      if ( $this->stop )
+        break;
     }
   }
 
@@ -232,7 +233,7 @@ class EventLoop {
     $socket = socket_accept( $this->serverSocket );
 
     if ( !$socket ) {
-      $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+      $this->log( 'Error on accept(): '. socket_strerror( socket_last_error() ) );
       throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
@@ -257,17 +258,18 @@ class EventLoop {
     // Populate the MessageBuffer from the socket
 
     $data = '';
-    $dataLen = socket_recv( $socket, $data, 1500, MSG_DONTWAIT );
+    $dataLen = socket_recv( $socket, $data, 32 * 1024, MSG_DONTWAIT );
 
     // There was an error
     if ( $dataLen === false ) {
-      $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+      $this->log( 'Error on recv(): '. socket_strerror( socket_last_error() ) );
       throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
     // Connection was dropped by peer
     if ( $dataLen === 0 ) {
       // Don't read/write from/to this socket in the future
+      $this->closeConnection( $this->sockets[ $socketIndex ] );
       unset( $this->sockets[ $socketIndex ] );
       return array();
     }
@@ -353,7 +355,8 @@ class EventLoop {
   private function closeConnection( $socket ) {
 
     // Close the connection until the worker client sends us a new result
-    socket_shutdown( $socket, 2 );
+    if ( socket_shutdown( $socket, 2 ) )
+      $this->log( 'Closed connection' );
   }
 
   private function log( $msg, $socketIndex = 0 ) {
