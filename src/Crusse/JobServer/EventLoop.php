@@ -142,9 +142,8 @@ class EventLoop {
       $writables = $this->sockets;
       $nullVar = null;
 
-      $changedSockets = socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
+      $changedSockets = @socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
 
-      // TODO: can it happen that $changedSockets === 0 and $readables is not empty?
       if ( $changedSockets === 0 ) {
         $this->log( 'Error: select() timed out' );
         throw new \Exception( 'select() timed out' );
@@ -194,6 +193,8 @@ class EventLoop {
 
       if ( !$messages )
         continue;
+
+      $this->log( 'Buffer had '. count( $messages ) .' messages' );
 
       foreach ( $messages as $message ) {
         foreach ( $this->callbacks as $callback ) {
@@ -258,9 +259,17 @@ class EventLoop {
     $data = '';
     $dataLen = socket_recv( $socket, $data, 1500, MSG_DONTWAIT );
 
+    // There was an error
     if ( $dataLen === false ) {
       $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
       throw new \Exception( socket_strerror( socket_last_error() ) );
+    }
+
+    // Connection was dropped by peer
+    if ( $dataLen === 0 ) {
+      // Don't read/write from/to this socket in the future
+      unset( $this->sockets[ $socketIndex ] );
+      return array();
     }
 
     $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
@@ -348,9 +357,14 @@ class EventLoop {
   }
 
   private function log( $msg, $socketIndex = 0 ) {
+
+    static $id = '';
+    if ( !$id )
+      $id = uniqid();
+
     $prefix = ( $this->serverSocket ) ? '[SERVER] ' : '[worker] ';
     file_put_contents( '/tmp/crusse-job-server.log',
-      microtime( true ) .' '. $prefix . $msg . PHP_EOL, FILE_APPEND );
+      $id .' '. $prefix . $msg . PHP_EOL, FILE_APPEND );
   }
 }
 

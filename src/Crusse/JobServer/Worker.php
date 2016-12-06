@@ -21,11 +21,18 @@ class Worker {
 
   function run() {
 
-    $loop = new EventLoop( $this->serverSocketAddr, false );
-    $loop->subscribe( array( $this, '_messageCallback' ) );
-    $socket = $loop->connect();
-    $this->sendMessage( $loop, $socket, 'new-worker' );
-    $loop->run();
+    // Try/catch in case the server exits before we have a chance to connect or 
+    // write to it
+    try {
+      $loop = new EventLoop( $this->serverSocketAddr, false );
+      $loop->subscribe( array( $this, '_messageCallback' ) );
+      $socket = $loop->connect();
+      $this->sendMessage( $loop, $socket, 'new-worker' );
+      $loop->run();
+    }
+    catch ( \Exception $e ) {
+      trigger_error( 'Server exited before worker could write to it' );
+    }
   }
 
   function _messageCallback( Message $message, EventLoop $loop, $socket ) {

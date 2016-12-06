@@ -230,6 +230,8 @@ class Server {
     return $results;
   }
 
+  // FIXME: workerTimeout isn't working yet. A sleep()ing worker does _not_ 
+  // cause a timeout.
   function setWorkerTimeout( $timeout ) {
     $this->workerTimeout = (int) $timeout;
   }
