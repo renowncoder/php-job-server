@@ -10,11 +10,9 @@ require_once dirname( __FILE__ ) .'/MessageBuffer.php';
 
 class Worker {
 
-  const CONNECT_TIMEOUT = 3;
-
   private $serverSocketAddr;
   // FIXME: see below
-  private $writeBuffer = array();
+  //private $writeBuffer = array();
 
   function __construct( $serverSocketAddr ) {
 
@@ -23,20 +21,14 @@ class Worker {
 
   function run() {
 
-    $stream = stream_socket_client( $this->serverSocketAddr, $errNum,
-      $errStr, self::CONNECT_TIMEOUT );
-
-    if ( !$stream || $errNum != 0 )
-      throw new \Exception( 'Could not create socket client: ('. $errNum .') '. $errStr );
-
-    $loop = new EventLoop( false );
+    $loop = new EventLoop( $this->serverSocketAddr, false );
     $loop->subscribe( array( $this, '_messageCallback' ) );
-    $loop->addClientStream( $stream );
-    $this->sendMessage( $loop, $stream, 'new-worker' );
+    $socket = $loop->connect();
+    $this->sendMessage( $loop, $socket, 'new-worker' );
     $loop->run();
   }
 
-  function _messageCallback( Message $message, EventLoop $loop, $stream ) {
+  function _messageCallback( Message $message, EventLoop $loop, $socket ) {
 
     $headers = $message->headers;
 
@@ -51,10 +43,10 @@ class Worker {
       throw new \Exception( '\''. $headers[ 'function' ] .'\' is not callable' );
 
     $result = call_user_func( $headers[ 'function' ], $message->body );
-    $this->sendMessage( $loop, $stream, 'job-result', $headers[ 'job-num' ], $result );
+    $this->sendMessage( $loop, $socket, 'job-result', $headers[ 'job-num' ], $result );
   }
 
-  private function sendMessage( EventLoop $loop, $stream, $cmd, $jobNumber = null, $body = '' ) {
+  private function sendMessage( EventLoop $loop, $socket, $cmd, $jobNumber = null, $body = '' ) {
 
     $message = new Message();
     $message->headers[ 'cmd' ] = $cmd;
@@ -71,13 +63,13 @@ class Worker {
     //// job?
     //if ( count( $this->writeBuffer ) >= 2 ) {
     //  foreach ( $this->writeBuffer as $msg )
-    //    $loop->send( $stream, $msg );
+    //    $loop->send( $socket, $msg );
     //  $this->writeBuffer = array();
     //}
     //else {
     //  $message = new Message();
     //  $message->headers[ 'cmd' ] = 'new-worker';
-      $loop->send( $stream, $message );
+      $loop->send( $socket, $message );
     //}
   }
 }

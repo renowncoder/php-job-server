@@ -2,61 +2,105 @@
 
 namespace Crusse\JobServer;
 
+// Bug: this constant is missing in PHP 5.*
+if ( !defined( 'MSG_DONTWAIT' ) )
+  define( 'MSG_DONTWAIT', 0x40 );
+
 class EventLoop {
 
-  private $serverStream;
+  const MAX_LISTEN_CONNECTIONS = 50;
+
+  private $serverSocket;
+  private $serverSocketAddr;
   private $acceptTimeout = 60;
   private $callbacks = array();
-  private $streams = array();
+  private $sockets = array();
   private $blocking = true;
   private $stop = false;
 
-  function __construct( $blockingIo ) {
-    
+  function __construct( $serverSocketAddr, $blockingIo ) {
+
+    $this->serverSocketAddr = $serverSocketAddr;
     $this->blocking = (bool) $blockingIo;
     file_put_contents( '/tmp/crusse-job-server.log', '' );
   }
 
-  function addClientStream( $stream, $readTimeout = 2, $writeTimeout = 2 ) {
-    
-    if ( !is_resource( $stream ) )
-      throw new \InvalidArgumentException( '$stream is not a resource' );
-    
-    stream_set_blocking( $stream, $this->blocking );
-    $socket = socket_import_stream( $stream );
-    socket_set_option( $socket, SOL_SOCKET, SO_RCVTIMEO, array( 'sec' => $readTimeout, 'usec' => 0 ) );
-    socket_set_option( $socket, SOL_SOCKET, SO_SNDTIMEO, array( 'sec' => $writeTimeout, 'usec' => 0 ) );
+  function __destruct() {
+
+    // If we were listening on a socket, remove the socket file
+    if ( $this->serverSocket )
+      unlink( $this->serverSocketAddr );
+  }
+
+  function connect() {
+
+    if ( ( $socket = socket_create( AF_UNIX, SOCK_STREAM, 0 ) ) === false )
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+
+    $this->addClientSocket( $socket );
+
+    if ( socket_connect( $socket, $this->serverSocketAddr ) === false )
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+
+    return $socket;
+  }
+
+  private function setSocketOptions( $socket ) {
+
+    if ( $this->blocking )
+      socket_set_block( $socket );
+    else
+      socket_set_nonblock( $socket );
+
+    socket_set_option( $socket, SOL_SOCKET, SO_RCVTIMEO, array( 'sec' => 2, 'usec' => 0 ) );
+    socket_set_option( $socket, SOL_SOCKET, SO_SNDTIMEO, array( 'sec' => 2, 'usec' => 0 ) );
+  }
+
+  private function addClientSocket( $socket ) {
+
+    $this->setSocketOptions( $socket );
 
     $foundSpot = false;
-    $streamCount = count( $this->streams );
+    $socketCount = count( $this->sockets );
 
     // Reuse array keys, instead of always pushing to the array with an
     // incrementing key, so that we don't have large integer keys. We don't use
-    // array_unshift when removing streams, as it's slow, so we use unset() 
+    // array_unshift when removing sockets, as it's slow, so we use unset() 
     // instead.
-    for ( $i = 0; $i < $streamCount; $i++ ) {
-      if ( !isset( $this->streams[ $i ] ) ) {
+    for ( $i = 0; $i < $socketCount; $i++ ) {
+      if ( !isset( $this->sockets[ $i ] ) ) {
         $foundSpot = true;
-        $this->streams[ $i ] = $stream;
+        $this->sockets[ $i ] = $socket;
         break;
       }
     }
 
     if ( !$foundSpot )
-      $this->streams[] = $stream;
+      $this->sockets[] = $socket;
 
     $this->readBuffer[ $i ] = new MessageBuffer();
     $this->writeBuffer[ $i ] = '';
   }
 
-  function addServerStream( $stream, $acceptTimeout = 60 ) {
-    
-    if ( !is_resource( $stream ) )
-      throw new \InvalidArgumentException( '$stream is not a resource' );
+  function listen( $acceptTimeout = 60 ) {
 
-    stream_set_blocking( $stream, $this->blocking );
+    @unlink( $this->serverSocketAddr );
 
-    $this->serverStream = $stream;
+    if ( ( $socket = socket_create( AF_UNIX, SOCK_STREAM, 0 ) ) === false )
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+
+    if ( socket_bind( $socket, $this->serverSocketAddr ) === false )
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+
+    if ( $this->blocking )
+      socket_set_block( $socket );
+    else
+      socket_set_nonblock( $socket );
+
+    if ( socket_listen( $socket, self::MAX_LISTEN_CONNECTIONS ) === false )
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+
+    $this->serverSocket = $socket;
     $this->acceptTimeout = (int) $acceptTimeout;
   }
 
@@ -68,21 +112,21 @@ class EventLoop {
     $this->callbacks[] = $callable;
   }
 
-  function send( $stream, Message $message ) {
+  function send( $socket, Message $message ) {
 
     if ( $this->stop ) {
       $this->log( 'Error: called send() after stop()' );
       throw new \LogicException( 'Calling send() after stop() is redundant' );
     }
     
-    $streamIndex = array_search( $stream, $this->streams, true );
+    $socketIndex = array_search( $socket, $this->sockets, true );
     
-    if ( $streamIndex === false ) {
-      $this->log( 'Error: $stream was not found in list of clients' );
-      throw new \InvalidArgumentException( 'No valid socket stream given' );
+    if ( $socketIndex === false ) {
+      $this->log( 'Error: $socket was not found in list of clients' );
+      throw new \InvalidArgumentException( 'No valid socket given' );
     }
 
-    $this->writeBuffer[ $streamIndex ] .= (string) $message;
+    $this->writeBuffer[ $socketIndex ] .= (string) $message;
   }
 
   function run() {
@@ -91,40 +135,43 @@ class EventLoop {
 
     while ( true ) {
 
-      $readables = $this->streams;
-      if ( $this->serverStream )
-        $readables[] = $this->serverStream;
-      $writables = $this->streams;
+      $readables = $this->sockets;
+      if ( $this->serverSocket )
+        $readables[] = $this->serverSocket;
+      $writables = $this->sockets;
       $nullVar = null;
 
-      $changedStreams = stream_select( $readables, $writables, $nullVar, $this->acceptTimeout );
+      $changedSockets = socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
 
-      // TODO: can it happen that $changedStreams === 0 and $readables is not empty?
-      if ( !$changedStreams ) {
+      // TODO: can it happen that $changedSockets === 0 and $readables is not empty?
+      if ( $changedSockets === 0 ) {
         $this->log( 'Error: select() timed out' );
         throw new \Exception( 'select() timed out' );
+      }
+      else if ( $changedSockets === false ) {
+        $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+        throw new \Exception( socket_strerror( socket_last_error() ) );
       }
 
       // When we're stopping the loop, write all remaining buffer out, but
       // don't receive anything in anymore
       if ( $readables && !$this->stop )
-        $this->handleReadableStreams( $readables );
+        $this->handleReadableSockets( $readables );
 
       if ( $writables )
-        $this->handleWritableStreams( $writables );
+        $this->handleWritableSockets( $writables );
 
       // Exit the loop when all writes have been done
       if ( $this->stop && !array_filter( $this->writeBuffer ) )
         break;
     }
 
-    foreach ( $this->streams as $stream )
-      $this->closeConnection( $stream );
-    $this->streams = array();
+    foreach ( $this->sockets as $socket )
+      $this->closeConnection( $socket );
+    $this->sockets = array();
 
-    if ( $this->serverStream )
-      $this->closeConnection( $this->serverStream );
-    unset( $this->serverStream );
+    if ( $this->serverSocket )
+      $this->closeConnection( $this->serverSocket );
   }
 
   function stop() {
@@ -132,83 +179,90 @@ class EventLoop {
     $this->stop = true;
   }
 
-  private function handleReadableStreams( $streams ) {
+  private function handleReadableSockets( $sockets ) {
 
-    if ( in_array( $this->serverStream, $streams ) )
+    if ( in_array( $this->serverSocket, $sockets ) )
       $this->acceptClient();
 
-    foreach ( $streams as $stream ) {
+    foreach ( $sockets as $socket ) {
 
-      if ( $stream === $this->serverStream )
+      if ( $socket === $this->serverSocket )
         continue;
 
-      $messages = $this->getMessagesFromStream( $stream );
+      $messages = $this->getMessagesFromSocket( $socket );
 
       if ( !$messages )
         continue;
 
       foreach ( $messages as $message ) {
         foreach ( $this->callbacks as $callback ) {
-          call_user_func( $callback, $message, $this, $stream );
+          call_user_func( $callback, $message, $this, $socket );
         }
       }
     }
   }
 
-  private function handleWritableStreams( $streams ) {
+  private function handleWritableSockets( $sockets ) {
 
-    foreach ( $streams as $stream ) {
+    foreach ( $sockets as $socket ) {
 
-      $streamIndex = array_search( $stream, $this->streams, true );
-      $buffer = $this->writeBuffer[ $streamIndex ];
+      $socketIndex = array_search( $socket, $this->sockets, true );
+      $buffer = $this->writeBuffer[ $socketIndex ];
       $bufferLen = strlen( $buffer );
 
       if ( !$bufferLen )
         continue;
 
-      $sentBytes = stream_socket_sendto( $stream, $buffer );
+      $sentBytes = socket_send( $socket, $buffer, $bufferLen, 0 );
 
-      if ( $sentBytes < 0 ) {
+      if ( $sentBytes === false ) {
         $this->log( 'Error: could not write to socket: "'. $buffer .'"' );
         throw new \Exception( 'Could not write to socket' );
       }
 
-      $this->log( 'Sent '. $sentBytes .' b to '. $streamIndex );
-      $this->writeBuffer[ $streamIndex ] = substr( $buffer, $sentBytes );
+      $this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
+      $this->writeBuffer[ $socketIndex ] = substr( $buffer, $sentBytes );
     }
   }
 
   private function acceptClient() {
 
-    $stream = stream_socket_accept( $this->serverStream, $this->acceptTimeout );
+    $socket = socket_accept( $this->serverSocket );
 
-    if ( !$stream ) {
-      $this->log( 'Error: reached accept timeout' );
-      throw new \Exception( 'Reached accept timeout ('. $this->acceptTimeout .')' );
+    if ( !$socket ) {
+      $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+      throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
-    $this->addClientStream( $stream );
-    $this->log( 'Accepted client' );
+    $this->addClientSocket( $socket );
+    $this->log( 'Accepted client '. ( count( $this->sockets ) - 1 ) );
 
-    return $stream;
+    return $socket;
   }
 
   /**
-   * Returns one or more Messages from the stream. Reading from the stream
+   * Returns one or more Messages from the socket. Reading from the socket
    * might return multiple messages, and in that case this function will
    * conserve message boundaries and return each message as a Message.
    *
    * @return array Array of Message objects. Can be empty.
    */
-  private function getMessagesFromStream( $stream ) {
+  private function getMessagesFromSocket( $socket ) {
 
-    $streamIndex = array_search( $stream, $this->streams, true );
-    $buffer = $this->readBuffer[ $streamIndex ];
+    $socketIndex = array_search( $socket, $this->sockets, true );
+    $buffer = $this->readBuffer[ $socketIndex ];
 
-    // Populate the MessageBuffer from the stream
+    // Populate the MessageBuffer from the socket
 
-    $data = stream_socket_recvfrom( $stream, 1500 );
-    $this->log( 'Recvd '. strlen( $data ) .' b from '. $streamIndex );
+    $data = '';
+    $dataLen = socket_recv( $socket, $data, 1500, MSG_DONTWAIT );
+
+    if ( $dataLen === false ) {
+      $this->log( 'Error: '. socket_strerror( socket_last_error() ) );
+      throw new \Exception( socket_strerror( socket_last_error() ) );
+    }
+
+    $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
     $this->populateMessageBuffer( $data, $buffer );
 
     // Get finished Message objects from the MessageBuffer
@@ -218,21 +272,21 @@ class EventLoop {
     while ( $buffer->hasMessage ) {
 
       $messages[] = $buffer->message;
-      // Check if we received multiple messages' data from the stream
+      // Check if we received multiple messages' data from the socket
       $overflowBytes = $buffer->bodyLen - $buffer->message->headers[ 'body-len' ];
       
       // We got more bytes than the message consists of, so we got (possibly
       // partially) other messages' data
       if ( $overflowBytes > 0 ) {
 
-        $this->log( 'Recvd multiple messages from stream (overflow: '. $overflowBytes .' b)' );
+        $this->log( 'Recvd multiple messages from socket (overflow: '. $overflowBytes .' b)' );
 
         $overflow = substr( $buffer->message->body, -$overflowBytes );
         $buffer->message->body .= substr( $buffer->message->body, 0, -$overflowBytes );
         $messages[] = $buffer->message;
 
         $buffer = new MessageBuffer();
-        $this->readBuffer[ $streamIndex ] = $buffer;
+        $this->readBuffer[ $socketIndex ] = $buffer;
 
         $this->populateMessageBuffer( $overflow, $buffer );
       }
@@ -240,7 +294,7 @@ class EventLoop {
       else {
 
         $buffer = new MessageBuffer();
-        $this->readBuffer[ $streamIndex ] = $buffer;
+        $this->readBuffer[ $socketIndex ] = $buffer;
       }
     }
 
@@ -286,16 +340,16 @@ class EventLoop {
     }
   }
 
-  private function closeConnection( $stream ) {
+  private function closeConnection( $socket ) {
 
     // Close the connection until the worker client sends us a new result
-    stream_socket_shutdown( $stream, STREAM_SHUT_RDWR );
-    fclose( $stream );
+    socket_shutdown( $socket, 2 );
   }
 
-  private function log( $msg ) {
-    $prefix = ( $this->serverStream ) ? '[SERVER] ' : '[worker] ';
-    file_put_contents( '/tmp/crusse-job-server.log', $prefix . $msg . PHP_EOL, FILE_APPEND );
+  private function log( $msg, $socketIndex = 0 ) {
+    $prefix = ( $this->serverSocket ) ? '[SERVER] ' : '[worker] ';
+    file_put_contents( '/tmp/crusse-job-server.log',
+      microtime( true ) .' '. $prefix . $msg . PHP_EOL, FILE_APPEND );
   }
 }
 

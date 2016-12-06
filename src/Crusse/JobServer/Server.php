@@ -167,8 +167,7 @@ use Symfony\Component\Process\Process;
 
 class Server {
 
-  private $serverStreamPath;
-  private $serverStream;
+  private $serverSocketAddr;
   private $workerCount;
   private $workerProcs = array();
   private $workerIncludes = array();
@@ -183,16 +182,19 @@ class Server {
       throw new \InvalidArgumentException( '$workerCount must be >= 1' );
     
     $this->workerCount = $workerCount;
+
+    $tmpDir = sys_get_temp_dir();
+    if ( !$tmpDir )
+      throw new \Exception( 'Could not find the system temporary files directory' );
+    $this->serverSocketAddr = $tmpDir .'/php_job_server_'. md5( uniqid( true ) ) .'.sock';
   }
 
   function __destruct() {
 
-    if ( $this->serverStreamPath )
-      unlink( $this->serverStreamPath );
-
     foreach ( $this->workerProcs as $proc ) {
       // Kill any stuck processes. They should already have all finished after
-      // the socket was closed, so normally this should not do anything.
+      // their sockets were closed by EventLoop->stop(), so normally this
+      // should not do anything.
       $proc->stop( 0, SIGTERM );
     }
   }
@@ -212,50 +214,24 @@ class Server {
 
   function getResults() {
 
-    try {
+    $loop = new EventLoop( $this->serverSocketAddr, false );
+    $loop->listen( $this->workerTimeout );
+    $loop->subscribe( array( $this, '_messageCallback' ) );
 
-      if ( !$this->serverStream )
-        $this->createServerStream();
-      if ( !$this->workerProcs )
-        $this->createWorkerProcs( $this->workerCount );
+    if ( !$this->workerProcs )
+      $this->createWorkerProcs( $this->workerCount );
 
-      $loop = new EventLoop( false );
-      $loop->addServerStream( $this->serverStream, $this->workerTimeout );
-      $loop->subscribe( array( $this, '_messageCallback' ) );
-      $loop->run();
-    }
-    catch ( \Exception $e ) {
-
-      // Make sure the socket file is deleted
-      if ( $this->serverStreamPath )
-        unlink( $this->serverStreamPath );
-
-      throw $e;
-    }
+    $loop->run();
 
     $results = $this->results;
-    $this->results = array();
     ksort( $results );
+    $this->results = array();
 
     return $results;
   }
 
   function setWorkerTimeout( $timeout ) {
     $this->workerTimeout = (int) $timeout;
-  }
-
-  private function createServerStream() {
-
-    $tmpDir = sys_get_temp_dir();
-    if ( !$tmpDir )
-      throw new \Exception( 'Could not find the system temporary files directory' );
-
-    $this->serverStreamPath = $tmpDir .'/php_job_server_'. md5( uniqid( true ) ) .'.sock';
-    @unlink( $this->serverStreamPath );
-    $this->serverStream = stream_socket_server( 'unix://'. $this->serverStreamPath, $errNum, $errStr );
-
-    if ( !$this->serverStream )
-      throw new \Exception( 'Could not create a server: ('. $errNum .') '. $errStr );
   }
 
   private function createWorkerProcs( $count ) {
@@ -267,7 +243,7 @@ class Server {
       // regular PHP processes that are run by the web server, so that the
       // worker's don't bring down the web server so easily
       $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .
-        '/worker_process.php \'unix://'. $this->serverStreamPath .'\'' );
+        '/worker_process.php \''. $this->serverSocketAddr .'\'' );
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();
       $process->start();
@@ -277,7 +253,7 @@ class Server {
     $this->workerProcs = $workers;
   }
 
-  function _messageCallback( Message $message, EventLoop $loop, $stream ) {
+  function _messageCallback( Message $message, EventLoop $loop, $socket ) {
 
     $headers = $message->headers;
 
@@ -311,7 +287,7 @@ class Server {
       $this->jobQueue[ $this->sentJobCount ] = '';
       $this->sentJobCount++;
 
-      $loop->send( $stream, $message );
+      $loop->send( $socket, $message );
     }
   }
 }
