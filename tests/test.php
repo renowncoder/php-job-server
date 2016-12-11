@@ -23,11 +23,13 @@ $server = new Crusse\JobServer\Server( 4 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 $server->setWorkerTimeout( 2 );
 
-for ( $i = 0; $i < 1000; $i++ )
-  $server->addJob( 'job_test', 'Job '. $i .': '. generateString( 2000 ) );
+for ( $i = 0; $i < 50; $i++ )
+  $server->addJob( 'job_test', 'Job '. $i .': '. generateString( 50 ) );
 
 $time = microtime( true );
-$res = $server->getResults();
+$res = $server->getResults( function( $result, $jobNumber, $total ) {
+  echo 'Job '. $jobNumber .'/'. $total .': '. $result . PHP_EOL;
+} );
 $elapsed = ( microtime( true ) - $time ) * 1000;
 $elapsedTotal = ( microtime( true ) - $timeTotal ) * 1000;
 
