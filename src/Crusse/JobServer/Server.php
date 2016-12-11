@@ -52,12 +52,9 @@ class Server {
     $this->workerIncludes[] = $phpFilePath;
   }
 
-  function getResults( $jobCallback = null ) {
+  function getOrderedResults() {
 
-    if ( $jobCallback && !is_callable( $jobCallback ) )
-      throw new \InvalidArgumentException( '$jobCallback is not callable' );
-
-    $this->jobCallback = $jobCallback;
+    $this->jobCallback = null;
 
     $loop = new EventLoop( $this->serverSocketAddr );
     $loop->listen( $this->workerTimeout );
@@ -73,6 +70,23 @@ class Server {
     $this->results = array();
 
     return $results;
+  }
+
+  function getResults( $jobCallback ) {
+
+    if ( !is_callable( $jobCallback ) )
+      throw new \InvalidArgumentException( '$jobCallback is not callable' );
+
+    $this->jobCallback = $jobCallback;
+
+    $loop = new EventLoop( $this->serverSocketAddr );
+    $loop->listen( $this->workerTimeout );
+    $loop->subscribe( array( $this, '_messageCallback' ) );
+
+    if ( !$this->workerProcs )
+      $this->createWorkerProcs( $this->workerCount );
+
+    $loop->run();
   }
 
   // FIXME: workerTimeout isn't working yet. A sleep()ing worker does _not_ 
@@ -110,7 +124,10 @@ class Server {
     if ( $headers[ 'cmd' ] === 'job-result' ) {
 
       $jobNumber = $headers[ 'job-num' ];
-      $this->results[ $jobNumber ] = $message->body;
+      // Only store the results if the client called getOrderedResults()
+      $this->results[ $jobNumber ] = ( $this->jobCallback )
+        ? true
+        : $message->body;
 
       if ( $this->jobCallback ) {
         call_user_func( $this->jobCallback, $message->body, count( $this->results ),
