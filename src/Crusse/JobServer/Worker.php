@@ -31,7 +31,7 @@ class Worker {
       $loop->run();
     }
     catch ( \Exception $e ) {
-      trigger_error( 'Server exited before worker could write to it' );
+      trigger_error( $e->getMessage() );
     }
   }
 
