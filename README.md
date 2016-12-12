@@ -1,6 +1,10 @@
 # php-job-server
 
-Brainstorming:
+## Errors
+
+Workers' PHP errors are logged to syslog (i.e. /var/log/syslog).
+
+## Brainstorming:
 
     Blocking i/o (perfectly synchronized):
 
