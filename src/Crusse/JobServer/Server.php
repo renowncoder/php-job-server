@@ -35,7 +35,9 @@ class Server {
       // Kill any stuck processes. They should already have all finished after
       // their sockets were closed by EventLoop->stop(), so normally this
       // should not do anything.
-      $proc->stop( 0, SIGTERM );
+      // 
+      // On some platforms (OSX) the SIGTERM constant is not defined.
+      $proc->stop( 0, ( defined( 'SIGTERM' ) ? SIGTERM : 15 ) );
     }
   }
 
