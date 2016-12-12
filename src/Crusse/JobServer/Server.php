@@ -51,7 +51,9 @@ class Server {
   }
 
   function addWorkerInclude( $phpFilePath ) {
-    $this->workerIncludes[] = $phpFilePath;
+
+    if ( $phpFilePath )
+      $this->workerIncludes[] = $phpFilePath;
   }
 
   function getOrderedResults() {

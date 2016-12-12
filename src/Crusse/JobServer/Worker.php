@@ -40,7 +40,7 @@ class Worker {
     $headers = $message->headers;
 
     if ( isset( $headers[ 'includes' ] ) ) {
-      foreach ( explode( ',', $headers[ 'includes' ] ) as $path )
+      foreach ( array_filter( explode( ',', $headers[ 'includes' ] ) ) as $path )
         require_once $path;
     }
 
