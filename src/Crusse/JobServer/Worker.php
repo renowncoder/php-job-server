@@ -11,8 +11,6 @@ require_once dirname( __FILE__ ) .'/MessageBuffer.php';
 class Worker {
 
   private $serverSocketAddr;
-  // FIXME: see below
-  //private $writeBuffer = array();
 
   function __construct( $serverSocketAddr ) {
 
@@ -61,23 +59,7 @@ class Worker {
       $message->headers[ 'job-num' ] = $jobNumber;
     $message->body = $body;
 
-    //$this->writeBuffer[] = $message;
-
-    //// FIXME:
-    //// Just testing what happens at the server when we send multiple messages
-    //// at once. Maybe we could buffer multiple results before sending them back
-    //// to the server kinda like this? How do we know when we've got the last
-    //// job?
-    //if ( count( $this->writeBuffer ) >= 2 ) {
-    //  foreach ( $this->writeBuffer as $msg )
-    //    $loop->send( $socket, $msg );
-    //  $this->writeBuffer = array();
-    //}
-    //else {
-    //  $message = new Message();
-    //  $message->headers[ 'cmd' ] = 'new-worker';
-      $loop->send( $socket, $message );
-    //}
+    $loop->send( $socket, $message );
   }
 }
 
