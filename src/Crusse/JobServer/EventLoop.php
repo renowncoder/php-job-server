@@ -27,11 +27,11 @@ class EventLoop {
   function __destruct() {
 
     foreach ( $this->sockets as $socket )
-      $this->closeConnection( $socket );
+      $this->disconnect( $socket );
 
     // If we were listening on a socket, remove the socket file
     if ( $this->serverSocket ) {
-      $this->closeConnection( $this->serverSocket );
+      $this->disconnect( $this->serverSocket );
       unlink( $this->serverSocketAddr );
     }
   }
@@ -69,7 +69,7 @@ class EventLoop {
     // array_unshift when removing sockets, as it's slow, so we use unset() 
     // instead.
     for ( $i = 0; $i < $socketCount; $i++ ) {
-      if ( !isset( $this->sockets[ $i ] ) ) {
+      if ( empty( $this->sockets[ $i ] ) ) {
         $foundSpot = true;
         $this->sockets[ $i ] = $socket;
         break;
@@ -137,8 +137,10 @@ class EventLoop {
     while ( true ) {
 
       // We have no more sockets to poll, all have disconnected
-      if ( !$this->sockets && !$this->serverSocket )
+      if ( !$this->sockets && !$this->serverSocket ) {
+        $this->log( 'No more sockets to poll, exiting run() loop' );
         break;
+      }
 
       $readables = $this->sockets;
       if ( $this->serverSocket )
@@ -173,16 +175,18 @@ class EventLoop {
       if ( $writables )
         $this->handleWritableSockets( $writables );
 
-      if ( $this->stop )
+      if ( $this->stop ) {
+        $this->log( 'stop() was called, exiting run() loop' );
         break;
+      }
     }
 
     foreach ( $this->sockets as $socket )
-      $this->closeConnection( $socket );
+      $this->disconnect( $socket );
     $this->sockets = array();
 
     if ( $this->serverSocket )
-      $this->closeConnection( $this->serverSocket );
+      $this->disconnect( $this->serverSocket );
   }
 
   function stop() {
@@ -205,7 +209,7 @@ class EventLoop {
       if ( !$messages )
         continue;
 
-      //$this->log( 'Buffer had '. count( $messages ) .' messages' );
+      $this->log( 'Buffer had '. count( $messages ) .' messages' );
 
       foreach ( $messages as $message ) {
         foreach ( $this->callbacks as $callback ) {
@@ -213,8 +217,10 @@ class EventLoop {
         }
       }
 
-      if ( $this->stop )
+      if ( $this->stop ) {
+        $this->log( 'stop() was called, so will not read from other sockets' );
         break;
+      }
     }
   }
 
@@ -236,7 +242,7 @@ class EventLoop {
         throw new \Exception( 'Could not write to socket' );
       }
 
-      //$this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
+      $this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
       $this->writeBuffer[ $socketIndex ] = substr( $buffer, $sentBytes );
     }
   }
@@ -251,7 +257,7 @@ class EventLoop {
     }
 
     $this->addClientSocket( $socket );
-    //$this->log( 'Accepted client '. ( count( $this->sockets ) - 1 ) );
+    $this->log( 'Accepted client '. ( count( $this->sockets ) - 1 ) );
 
     return $socket;
   }
@@ -282,12 +288,12 @@ class EventLoop {
     // Connection was dropped by peer
     if ( $dataLen === 0 ) {
       // Don't read/write from/to this socket in the future
-      $this->closeConnection( $this->sockets[ $socketIndex ] );
+      $this->disconnect( $this->sockets[ $socketIndex ] );
       unset( $this->sockets[ $socketIndex ] );
       return array();
     }
 
-    //$this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
+    $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
     $this->populateMessageBuffer( $data, $buffer );
 
     // Get finished Message objects from the MessageBuffer
@@ -304,7 +310,7 @@ class EventLoop {
       // partially) other messages' data
       if ( $overflowBytes > 0 ) {
 
-        //$this->log( 'Recvd multiple messages from socket (overflow: '. $overflowBytes .' b)' );
+        $this->log( 'Recvd multiple messages from socket (overflow: '. $overflowBytes .' b)' );
 
         $overflow = substr( $buffer->message->body, -$overflowBytes );
         $buffer->message->body .= substr( $buffer->message->body, 0, -$overflowBytes );
@@ -365,7 +371,7 @@ class EventLoop {
     }
   }
 
-  private function closeConnection( $socket ) {
+  private function disconnect( $socket ) {
 
     // Close the connection until the worker client sends us a new result. We
     // silence any errors so that we don't have to test the connection status
