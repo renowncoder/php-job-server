@@ -155,7 +155,8 @@ class EventLoop {
         $writables = null;
       }
 
-      $changedSockets = socket_select( $readables, $writables, $except = null, $this->acceptTimeout );
+      $except = null;
+      $changedSockets = socket_select( $readables, $writables, $except, $this->acceptTimeout );
 
       if ( $changedSockets === 0 ) {
         $this->log( 'Error: select() timed out' );
