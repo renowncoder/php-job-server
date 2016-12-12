@@ -285,13 +285,10 @@ class EventLoop {
       throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
-    // Connection was dropped by peer
-    if ( $dataLen === 0 ) {
-      // Don't read/write from/to this socket in the future
-      $this->disconnect( $this->sockets[ $socketIndex ] );
-      unset( $this->sockets[ $socketIndex ] );
-      return array();
-    }
+    // Connection was dropped by peer. We expects peers to be dropped only after
+    // $this->stop() has been called, so this is unexpected.
+    if ( $dataLen === 0 )
+      throw new \Exception( 'Socket disconnected unexpectedly' );
 
     $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
     $this->populateMessageBuffer( $data, $buffer );
