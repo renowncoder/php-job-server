@@ -367,8 +367,10 @@ class EventLoop {
 
   private function closeConnection( $socket ) {
 
-    // Close the connection until the worker client sends us a new result
-    if ( socket_shutdown( $socket, 2 ) )
+    // Close the connection until the worker client sends us a new result. We
+    // silence any errors so that we don't have to test the connection status
+    // before we try to close the socket.
+    if ( @socket_shutdown( $socket, 2 ) )
       $this->log( 'Closed connection' );
   }
 
