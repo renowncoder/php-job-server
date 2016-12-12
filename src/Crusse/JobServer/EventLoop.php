@@ -16,6 +16,8 @@ class EventLoop {
   private $callbacks = array();
   private $sockets = array();
   private $stop = false;
+  private $readBuffer = array();
+  private $writeBuffer = array();
 
   function __construct( $serverSocketAddr ) {
 
@@ -141,10 +143,19 @@ class EventLoop {
       $readables = $this->sockets;
       if ( $this->serverSocket )
         $readables[] = $this->serverSocket;
-      $writables = $this->sockets;
-      $nullVar = null;
 
-      $changedSockets = socket_select( $readables, $writables, $nullVar, $this->acceptTimeout );
+      $writableSocketKeys = array_keys( array_filter( $this->writeBuffer ) );
+     
+      if ( $writableSocketKeys ) {
+        $writables = array();
+        foreach ( $writableSocketKeys as $key )
+          $writables[] = $this->sockets[ $key ];
+      }
+      else {
+        $writables = null;
+      }
+
+      $changedSockets = socket_select( $readables, $writables, $except = null, $this->acceptTimeout );
 
       if ( $changedSockets === 0 ) {
         $this->log( 'Error: select() timed out' );
