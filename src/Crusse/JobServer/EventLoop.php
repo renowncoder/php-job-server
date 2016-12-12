@@ -83,7 +83,8 @@ class EventLoop {
 
   function listen( $acceptTimeout = 60 ) {
 
-    file_put_contents( '/tmp/crusse-job-server.log', '' );
+    // Uncomment only when debugging
+    //file_put_contents( '/tmp/crusse-job-server.log', '' );
 
     @unlink( $this->serverSocketAddr );
 
@@ -192,7 +193,7 @@ class EventLoop {
       if ( !$messages )
         continue;
 
-      $this->log( 'Buffer had '. count( $messages ) .' messages' );
+      //$this->log( 'Buffer had '. count( $messages ) .' messages' );
 
       foreach ( $messages as $message ) {
         foreach ( $this->callbacks as $callback ) {
@@ -223,7 +224,7 @@ class EventLoop {
         throw new \Exception( 'Could not write to socket' );
       }
 
-      $this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
+      //$this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
       $this->writeBuffer[ $socketIndex ] = substr( $buffer, $sentBytes );
     }
   }
@@ -238,7 +239,7 @@ class EventLoop {
     }
 
     $this->addClientSocket( $socket );
-    $this->log( 'Accepted client '. ( count( $this->sockets ) - 1 ) );
+    //$this->log( 'Accepted client '. ( count( $this->sockets ) - 1 ) );
 
     return $socket;
   }
@@ -258,7 +259,7 @@ class EventLoop {
     // Populate the MessageBuffer from the socket
 
     $data = '';
-    $dataLen = socket_recv( $socket, $data, 32 * 1024, MSG_DONTWAIT );
+    $dataLen = socket_recv( $socket, $data, 64 * 1024, MSG_DONTWAIT );
 
     // There was an error
     if ( $dataLen === false ) {
@@ -274,7 +275,7 @@ class EventLoop {
       return array();
     }
 
-    $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
+    //$this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
     $this->populateMessageBuffer( $data, $buffer );
 
     // Get finished Message objects from the MessageBuffer
@@ -291,7 +292,7 @@ class EventLoop {
       // partially) other messages' data
       if ( $overflowBytes > 0 ) {
 
-        $this->log( 'Recvd multiple messages from socket (overflow: '. $overflowBytes .' b)' );
+        //$this->log( 'Recvd multiple messages from socket (overflow: '. $overflowBytes .' b)' );
 
         $overflow = substr( $buffer->message->body, -$overflowBytes );
         $buffer->message->body .= substr( $buffer->message->body, 0, -$overflowBytes );
@@ -360,6 +361,9 @@ class EventLoop {
   }
 
   private function log( $msg, $socketIndex = 0 ) {
+
+    // Remove this only for debugging
+    return;
 
     static $id = '';
     if ( !$id )
