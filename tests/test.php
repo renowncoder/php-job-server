@@ -24,10 +24,10 @@ function generateString($length) {
 
 $timeTotal = microtime( true );
 
-$server = new Crusse\JobServer\Server( 6 );
+$server = new Crusse\JobServer\Server( 4 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 $server->setWorkerTimeout( 2 );
-for ( $i = 0; $i < 1000; $i++ )
+for ( $i = 0; $i < 100; $i++ )
   $server->addJob( 'job_test', 'Job '. $i .': '. generateString( 100 * 250 ) );
 
 echo 'Results with callback:'. PHP_EOL . PHP_EOL;
@@ -38,10 +38,10 @@ $server->getResults( function( $result, $jobNumber, $total ) {
 
 echo PHP_EOL .'Ordered results:'. PHP_EOL . PHP_EOL;
 
-$server = new Crusse\JobServer\Server( 6 );
+$server = new Crusse\JobServer\Server( 4 );
 $server->addWorkerInclude( __DIR__ .'/functions.php' );
 $server->setWorkerTimeout( 2 );
-for ( $i = 0; $i < 1000; $i++ )
+for ( $i = 0; $i < 100; $i++ )
   $server->addJob( 'job_test', 'Job '. $i .': '. generateString( 100 * 250 ) );
 
 $time = microtime( true );
