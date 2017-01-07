@@ -128,11 +128,15 @@ class Server {
     if ( $headers[ 'cmd' ] === 'job-result' ) {
 
       $jobNumber = $headers[ 'job-num' ];
-      // Only store the results if the client called getOrderedResults()
+
+      if ( strtolower( $headers[ 'job-status' ] ) != 'ok' )
+        throw new \RuntimeException( 'Worker error: ['. $headers[ 'job-status' ] .'] '. $message->body );
+
+      // Only store the result if the client called getOrderedResults()
       $this->results[ $jobNumber ] = ( $this->jobCallback )
         ? true
         : $message->body;
-
+      // ...otherwise return the result immediately in the callback
       if ( $this->jobCallback ) {
         call_user_func( $this->jobCallback, $message->body, count( $this->results ),
           count( $this->jobQueue ) );
