@@ -285,7 +285,7 @@ class EventLoop {
       throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
-    // Connection was dropped by peer. We expects peers to be dropped only after
+    // Connection was dropped by peer. We expect peers to be dropped only after
     // $this->stop() has been called, so this is unexpected.
     if ( $dataLen === 0 )
       throw new \Exception( 'Socket disconnected unexpectedly' );

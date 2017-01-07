@@ -93,8 +93,6 @@ class Server {
     $loop->run();
   }
 
-  // FIXME: workerTimeout isn't working yet. A sleep()ing worker does _not_ 
-  // cause a timeout. Check why.
   function setWorkerTimeout( $timeout ) {
     $this->workerTimeout = (int) $timeout;
   }
