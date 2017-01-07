@@ -1,7 +1,7 @@
 {
   "name": "crusse/job-server",
   "description": "A library for computing the results of multiple PHP scripts in parallel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "require": {
     "php": ">=5.3.3",
     "symfony/process": "^2.6"
