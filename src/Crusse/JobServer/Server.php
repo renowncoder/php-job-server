@@ -20,12 +20,13 @@ class Server {
 
     if ( $workerCount < 1 )
       throw new \InvalidArgumentException( '$workerCount must be >= 1' );
-    
+
     $this->workerCount = $workerCount;
 
     $tmpDir = sys_get_temp_dir();
     if ( !$tmpDir )
       throw new \Exception( 'Could not find the system temporary files directory' );
+
     $this->serverSocketAddr = $tmpDir .'/php_job_server_'. md5( uniqid( true ) ) .'.sock';
   }
 
@@ -62,12 +63,12 @@ class Server {
 
     $loop = new EventLoop( $this->serverSocketAddr );
     $loop->listen( $this->workerTimeout );
-    $loop->subscribe( array( $this, '_messageCallback' ) );
+    $loop->subscribe( array( $this, '_handleMessageFromWorker' ) );
 
     if ( !$this->workerProcs )
       $this->createWorkerProcs( $this->workerCount );
 
-    $loop->run();
+    $loop->receive();
 
     $results = $this->results;
     ksort( $results );
@@ -85,12 +86,12 @@ class Server {
 
     $loop = new EventLoop( $this->serverSocketAddr );
     $loop->listen( $this->workerTimeout );
-    $loop->subscribe( array( $this, '_messageCallback' ) );
+    $loop->subscribe( array( $this, '_handleMessageFromWorker' ) );
 
     if ( !$this->workerProcs )
       $this->createWorkerProcs( $this->workerCount );
 
-    $loop->run();
+    $loop->receive();
   }
 
   function setWorkerTimeout( $timeout ) {
@@ -107,16 +108,18 @@ class Server {
       // worker's don't bring down the web server so easily
       $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .
         '/worker_process.php \''. $this->serverSocketAddr .'\'' );
+
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();
       $process->start();
+
       $workers[] = $process;
     }
 
     $this->workerProcs = $workers;
   }
 
-  function _messageCallback( Message $message, EventLoop $loop, $socket ) {
+  function _handleMessageFromWorker( Message $message, EventLoop $loop, $socket ) {
 
     $headers = $message->headers;
 
@@ -134,6 +137,7 @@ class Server {
       $this->results[ $jobNumber ] = ( $this->jobCallback )
         ? true
         : $message->body;
+
       // ...otherwise return the result immediately in the callback
       if ( $this->jobCallback ) {
         call_user_func( $this->jobCallback, $message->body, count( $this->results ),
@@ -141,9 +145,10 @@ class Server {
       }
     }
 
-    // We have all the results; stop the event loop
+    // We have all the results; stop the server (which causes workers to stop
+    // as well)
     if ( count( $this->results ) >= count( $this->jobQueue ) ) {
-      
+
       $loop->stop();
     }
     // Send a job to the worker
@@ -159,7 +164,7 @@ class Server {
       $message->headers[ 'function' ] = $job[ 0 ];
       $message->body = $job[ 1 ];
 
-      // Job was sent to worker, free memory
+      // Job was sent to worker. Free memory.
       $this->jobQueue[ $this->sentJobCount ] = '';
       $this->sentJobCount++;
 

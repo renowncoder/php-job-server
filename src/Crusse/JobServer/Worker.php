@@ -7,6 +7,7 @@ namespace Crusse\JobServer;
 require_once dirname( __FILE__ ) .'/EventLoop.php';
 require_once dirname( __FILE__ ) .'/Message.php';
 require_once dirname( __FILE__ ) .'/MessageBuffer.php';
+require_once dirname( __FILE__ ) .'/SocketDisconnectedException.php';
 
 class Worker {
 
@@ -26,7 +27,13 @@ class Worker {
       $loop->subscribe( array( $this, '_messageCallback' ) );
       $socket = $loop->connect();
       $this->sendMessage( $loop, $socket, 'new-worker' );
-      $loop->run();
+      $loop->receive();
+    }
+    catch ( SocketDisconnectedException $e ) {
+      // This is expected. Currently, if the Server disconnects the socket that
+      // the Worker is communicating on, it's a signal to the Worker that there
+      // are not more jobs to handle. Maybe do this more cleanly later, by
+      // sending a "close" message to the Workers from the Server like HTTP does...
     }
     catch ( \Exception $e ) {
       trigger_error( $e->getMessage() .' in '. $e->getFile() .':'. $e->getLine(), E_USER_WARNING );

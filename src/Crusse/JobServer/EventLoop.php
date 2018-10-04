@@ -39,12 +39,12 @@ class EventLoop {
   function connect() {
 
     if ( ( $socket = socket_create( AF_UNIX, SOCK_STREAM, 0 ) ) === false )
-      throw new \Exception( socket_strerror( socket_last_error() ) );
+      throw new \Exception( 'Could not create socket: '. socket_strerror( socket_last_error() ) );
 
     $this->addClientSocket( $socket );
 
     if ( socket_connect( $socket, $this->serverSocketAddr ) === false )
-      throw new \Exception( socket_strerror( socket_last_error() ) );
+      throw new \Exception( 'Could not connect to socket. Peer is probably not listen()ing. '. socket_strerror( socket_last_error() ) );
 
     return $socket;
   }
@@ -106,7 +106,7 @@ class EventLoop {
   }
 
   function subscribe( $callable ) {
-    
+
     if ( !is_callable( $callable ) )
       throw new \InvalidArgumentException( '$callable is not callable' );
 
@@ -119,9 +119,9 @@ class EventLoop {
       $this->log( 'Error: called send() after stop()' );
       throw new \LogicException( 'Calling send() after stop() is redundant' );
     }
-    
+
     $socketIndex = array_search( $socket, $this->sockets, true );
-    
+
     if ( $socketIndex === false ) {
       $this->log( 'Error: $socket was not found in list of clients' );
       throw new \InvalidArgumentException( 'No valid socket given' );
@@ -130,7 +130,7 @@ class EventLoop {
     $this->writeBuffer[ $socketIndex ] .= (string) $message;
   }
 
-  function run() {
+  function receive() {
 
     $this->log( 'Using select() timeout of '. $this->acceptTimeout .' s' );
 
@@ -138,7 +138,7 @@ class EventLoop {
 
       // We have no more sockets to poll, all have disconnected
       if ( !$this->sockets && !$this->serverSocket ) {
-        $this->log( 'No more sockets to poll, exiting run() loop' );
+        $this->log( 'No more sockets to poll, exiting receive() loop' );
         break;
       }
 
@@ -146,8 +146,11 @@ class EventLoop {
       if ( $this->serverSocket )
         $readables[] = $this->serverSocket;
 
-      $writableSocketKeys = array_keys( array_filter( $this->writeBuffer ) );
-     
+      // We're only interested in the sockets for which we have any buffered
+      // data to send.
+      // Note: array_filter() preserves keys.
+      $writableSocketKeys = array_keys( array_filter( $this->writeBuffer, 'strlen' ) );
+
       if ( $writableSocketKeys ) {
         $writables = array();
         foreach ( $writableSocketKeys as $key )
@@ -176,21 +179,23 @@ class EventLoop {
         $this->handleWritableSockets( $writables );
 
       if ( $this->stop ) {
-        $this->log( 'stop() was called, exiting run() loop' );
+        $this->log( 'stop() was called, exiting receive() loop' );
         break;
       }
     }
 
     foreach ( $this->sockets as $socket )
       $this->disconnect( $socket );
+
     $this->sockets = array();
 
-    if ( $this->serverSocket )
+    if ( $this->serverSocket ) {
       $this->disconnect( $this->serverSocket );
+      $this->serverSocket = null;
+    }
   }
 
   function stop() {
-    
     $this->stop = true;
   }
 
@@ -218,7 +223,7 @@ class EventLoop {
       }
 
       if ( $this->stop ) {
-        $this->log( 'stop() was called, so will not read from other sockets' );
+        $this->log( 'stop() was called, so will skip reading from remaining readable sockets' );
         break;
       }
     }
@@ -232,6 +237,7 @@ class EventLoop {
       $buffer = $this->writeBuffer[ $socketIndex ];
       $bufferLen = strlen( $buffer );
 
+      // Nothing to write
       if ( !$bufferLen )
         continue;
 
@@ -242,7 +248,7 @@ class EventLoop {
         throw new \Exception( 'Could not write to socket' );
       }
 
-      $this->log( 'Sent '. $sentBytes .' b to '. $socketIndex );
+      $this->log( 'Sent '. $sentBytes .' bytes to '. $socketIndex );
       $this->writeBuffer[ $socketIndex ] = substr( $buffer, $sentBytes );
     }
   }
@@ -274,9 +280,13 @@ class EventLoop {
     $socketIndex = array_search( $socket, $this->sockets, true );
     $buffer = $this->readBuffer[ $socketIndex ];
 
+    // --------------------------------------------------------------------
     // Populate the MessageBuffer from the socket
+    // --------------------------------------------------------------------
 
     $data = '';
+
+    // "socket_recv() returns the number of bytes received, or FALSE if there was an error"
     $dataLen = socket_recv( $socket, $data, 64 * 1024, MSG_DONTWAIT );
 
     // There was an error
@@ -285,15 +295,21 @@ class EventLoop {
       throw new \Exception( socket_strerror( socket_last_error() ) );
     }
 
-    // Connection was dropped by peer. We expect peers to be dropped only after
-    // $this->stop() has been called, so this is unexpected.
+    // Connection was dropped by peer. Calling code can decide if this is
+    // an error or not by catching the exception (for the Server this is
+    // probably an error, as Workers shouldn't disconnect before the Server,
+    // but for Workers the Server disconnecting is a signal that there's no
+    // more jobs; maybe do this more cleanly later, by sending a "close" message
+    // to the Workers from the Server like HTTP does...).
     if ( $dataLen === 0 )
-      throw new \Exception( 'Socket disconnected unexpectedly' );
+      throw new SocketDisconnectedException( 'Socket disconnected' );
 
-    $this->log( 'Recvd '. $dataLen .' b from '. $socketIndex );
+    $this->log( 'Recvd '. $dataLen .' bytes from '. $socketIndex );
     $this->populateMessageBuffer( $data, $buffer );
 
+    // --------------------------------------------------------------------
     // Get finished Message objects from the MessageBuffer
+    // --------------------------------------------------------------------
 
     $messages = array();
 
@@ -302,7 +318,7 @@ class EventLoop {
       $messages[] = $buffer->message;
       // Check if we received multiple messages' data from the socket
       $overflowBytes = $buffer->bodyLen - $buffer->message->headers[ 'body-len' ];
-      
+
       // We got more bytes than the message consists of, so we got (possibly
       // partially) other messages' data
       if ( $overflowBytes > 0 ) {
@@ -333,11 +349,11 @@ class EventLoop {
 
     // We already have the header. Add further data to body.
     if ( $buffer->headerEnd !== false ) {
-      
+
       $dataLen = strlen( $data );
       $buffer->bodyLen += $dataLen;
       $buffer->message->body .= $data;
-      
+
       if ( $buffer->bodyLen >= $buffer->message->headers[ 'body-len' ] )
         $buffer->hasMessage = true;
     }
@@ -370,11 +386,20 @@ class EventLoop {
 
   private function disconnect( $socket ) {
 
+    $clientName = array_search( $socket, $this->sockets, true );
+
+    if ( $clientName === false ) {
+      if ( $socket === $this->serverSocket )
+        $clientName = 'SERVER';
+      else
+        $clientName = '[unknown]';
+    }
+
     // Close the connection until the worker client sends us a new result. We
     // silence any errors so that we don't have to test the connection status
     // before we try to close the socket.
     if ( @socket_shutdown( $socket, 2 ) )
-      $this->log( 'Closed connection' );
+      $this->log( 'Closed connection to socket '. $clientName );
   }
 
   private function log( $msg, $socketIndex = 0 ) {
@@ -387,8 +412,7 @@ class EventLoop {
       $id = uniqid();
 
     $prefix = ( $this->serverSocket ) ? '[SERVER] ' : '[worker] ';
-    file_put_contents( '/tmp/crusse-job-server.log',
-      $id .' '. $prefix . $msg . PHP_EOL, FILE_APPEND );
+    file_put_contents( '/tmp/crusse-job-server.log', number_format( microtime( true ), 4, '.', '' ) .' '. $id .' '. $prefix . $msg . PHP_EOL, FILE_APPEND );
   }
 }
 
