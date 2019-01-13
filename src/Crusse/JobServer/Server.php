@@ -105,9 +105,9 @@ class Server {
     for ( $i = 0; $i < $count; $i++ ) {
       // We use 'nice' to make the worker process slightly lower priority than
       // regular PHP processes that are run by the web server, so that the
-      // worker's don't bring down the web server so easily
+      // workers don't bring down the web server so easily
       $process = new Process( 'exec nice -n 5 php '. dirname( __FILE__ ) .
-        '/worker_process.php \''. $this->serverSocketAddr .'\'' );
+        '/worker_process.php '. escapeshellarg( $this->serverSocketAddr ) );
 
       // We don't need stdout/stderr as we're communicating via sockets
       $process->disableOutput();

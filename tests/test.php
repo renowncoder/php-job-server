@@ -67,4 +67,6 @@ catch ( \RuntimeException $e ) {
 
 echo 'Finished in '. $elapsed .' ms'. PHP_EOL;
 echo 'Total '. $elapsedTotal .' ms'. PHP_EOL;
-
+echo PHP_EOL;
+echo 'Successfully ran all tests'. PHP_EOL;
+echo PHP_EOL;
